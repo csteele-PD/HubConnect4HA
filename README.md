@@ -50,7 +50,7 @@ GET http://HOME_ASSISTANT:8123/api/hubconnect/devices/get
 Authorization: Bearer YOUR_TOKEN
 ```
 
-It auto-exposes a small set of currently supported HA entities: switches, lights, temperature sensors, humidity sensors, illuminance sensors, power sensors, energy sensors, voltage sensors, and common binary sensors such as motion, contact, water, smoke, and presence.
+It exposes selected supported HA entities: switches, lights, temperature sensors, humidity sensors, illuminance sensors, power sensors, energy sensors, voltage sensors, and common binary sensors such as motion, contact, water, smoke, and presence. A future "all" mode should be an explicit selector choice, not implicit auto-export behavior.
 
 ## Pairing With Hubitat
 
@@ -61,6 +61,13 @@ Use a Home Assistant base URL that Hubitat can reach on the LAN, for example:
 ```text
 http://192.168.7.70:8123
 ```
+
+## Device Selection
+
+This integration should eventually support both directions under one integration:
+
+- Hubitat to Home Assistant: import only devices selected in the Hubitat HubConnect Server Instance. The HubConnect remote flow has no implicit "all" behavior.
+- Home Assistant to Hubitat: export only entities selected in Home Assistant. If "all" is offered later, it should be an explicit selector option.
 
 ## HACS Test
 

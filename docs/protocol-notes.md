@@ -24,6 +24,13 @@ The route prefix is Home Assistant-specific. Hubitat will need a client URI that
 
 `devices/save` creates persistent Home Assistant shadow entities for Hubitat-selected devices. Device resends are idempotent enough for current testing and preserve existing shadow objects so live event updates do not lag by one event.
 
+## Device Selection Model
+
+The integration should support both import and export flows under one Home Assistant integration, but both flows are selection-driven:
+
+- Hubitat to Home Assistant imports only devices selected in the Hubitat HubConnect Server Instance. HubConnect remote clients do not receive an implicit "all devices" selection.
+- Home Assistant to Hubitat exports only entities selected in Home Assistant. A future "all" choice may exist only as an explicit selector option.
+
 ## Reference Implementations
 
 Use both protocol-native and Home Assistant-native references when expanding support:
