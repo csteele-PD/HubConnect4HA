@@ -1,4 +1,9 @@
-"""HubConnect endpoint integration for Home Assistant."""
+"""HubConnect endpoint integration for Home Assistant.
+
+HubConnect for Hubitat was created by Steve White / Retail Media Concepts LLC.
+This integration is an independent Python implementation of a compatible Home
+Assistant remote endpoint.
+"""
 
 from __future__ import annotations
 

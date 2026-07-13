@@ -76,5 +76,8 @@ Use the repository URL and choose `Integration` as the category.
 
 Useful references for future mapping work:
 
+- `HubitatCommunity/HubConnect` for the original HubConnect Hubitat project by Steve White / Retail Media Concepts LLC.
 - `danTapps/homebridge-hubitat-hubconnect` for HubConnect remote endpoint behavior and device mapping ideas.
 - `jason0x43/hacs-hubitat` for Home Assistant-native Hubitat entity conventions.
+
+See `NOTICE.md` for HubConnect attribution notes.
