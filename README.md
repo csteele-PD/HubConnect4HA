@@ -67,7 +67,7 @@ http://192.168.7.70:8123
 This integration should eventually support both directions under one integration:
 
 - Hubitat to Home Assistant: import only devices selected in the Hubitat HubConnect Server Instance. The HubConnect remote flow has no implicit "all" behavior.
-- Home Assistant to Hubitat: export only entities selected in Home Assistant. If "all" is offered later, it should be an explicit selector option.
+- Home Assistant to Hubitat: export only entities selected in the HubConnect integration options. If "all" is offered later, it should be an explicit selector option.
 
 ## HACS Test
 

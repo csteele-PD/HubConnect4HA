@@ -29,7 +29,7 @@ The route prefix is Home Assistant-specific. Hubitat will need a client URI that
 The integration should support both import and export flows under one Home Assistant integration, but both flows are selection-driven:
 
 - Hubitat to Home Assistant imports only devices selected in the Hubitat HubConnect Server Instance. HubConnect remote clients do not receive an implicit "all devices" selection.
-- Home Assistant to Hubitat exports only entities selected in Home Assistant. A future "all" choice may exist only as an explicit selector option.
+- Home Assistant to Hubitat exports only entities selected in the HubConnect integration options. `/devices/get` must not auto-export every mappable Home Assistant entity. A future "all" choice may exist only as an explicit selector option.
 
 ## Reference Implementations
 
@@ -67,3 +67,13 @@ HubConnect device events are URL-encoded JSON objects:
 ```
 
 The event handler updates the persistent shadow state and writes the corresponding Home Assistant entity state directly through the entity registry. That direct state write is a prototype decision to revisit before hardening the integration.
+
+## Debug Endpoint
+
+`GET /api/hubconnect/system/shadows/get` returns the shadow registry, recent requests, entity registry entries, live entity objects, and current Home Assistant states for HubConnect entities.
+
+For removal tests, compare:
+
+- `entities`: active HubConnect shadow entities after the latest selected-device payload.
+- `orphaned_entity_registry`: Home Assistant entity-registry entries whose HubConnect shadow no longer exists.
+- `orphaned_live_entities`: loaded HubConnect entity objects whose HubConnect shadow no longer exists.

@@ -8,8 +8,10 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.helpers import selector
 
 from .const import (
+    CONF_EXPORTED_ENTITY_IDS,
     CONF_HA_BASE_URL,
     CONF_HUBITAT_CONNECTION_KEY,
     CONF_HUBITAT_CONNECTION_TYPE,
@@ -21,7 +23,13 @@ from .const import (
     DEFAULT_REMOTE_NAME,
     DOMAIN,
 )
-from .pairing import PairingError, async_pair_with_hubitat, decode_connection_key
+from .pairing import (
+    PairingError,
+    async_pair_with_hubitat,
+    async_post_to_hubitat,
+    decode_connection_key,
+)
+from .protocol import build_devices_payload
 
 
 class HubConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -86,33 +94,49 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            try:
-                hubitat_data = decode_connection_key(
-                    user_input[CONF_HUBITAT_CONNECTION_KEY]
-                )
-                await async_pair_with_hubitat(
-                    self.hass,
-                    hubitat_data,
-                    user_input[CONF_HA_BASE_URL],
-                    self._config_entry.data[CONF_REMOTE_NAME],
-                    self._config_entry.data[CONF_TOKEN],
-                    self._config_entry.entry_id,
-                )
-            except PairingError as err:
-                errors["base"] = str(err)
-            else:
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        CONF_HA_BASE_URL: user_input[CONF_HA_BASE_URL],
-                        CONF_HUBITAT_URI: hubitat_data["uri"],
-                        CONF_HUBITAT_TOKEN: hubitat_data["token"],
-                        CONF_HUBITAT_TYPE: hubitat_data.get("type"),
-                        CONF_HUBITAT_CONNECTION_TYPE: hubitat_data.get(
-                            "connectionType"
-                        ),
-                    },
-                )
+            options = {
+                **self._config_entry.options,
+                CONF_HA_BASE_URL: user_input[CONF_HA_BASE_URL],
+                CONF_EXPORTED_ENTITY_IDS: user_input.get(
+                    CONF_EXPORTED_ENTITY_IDS,
+                    [],
+                ),
+            }
+            if user_input.get(CONF_HUBITAT_CONNECTION_KEY):
+                try:
+                    hubitat_data = decode_connection_key(
+                        user_input[CONF_HUBITAT_CONNECTION_KEY]
+                    )
+                    await async_pair_with_hubitat(
+                        self.hass,
+                        hubitat_data,
+                        user_input[CONF_HA_BASE_URL],
+                        self._config_entry.data[CONF_REMOTE_NAME],
+                        self._config_entry.data[CONF_TOKEN],
+                        self._config_entry.entry_id,
+                    )
+                except PairingError as err:
+                    errors["base"] = str(err)
+                else:
+                    options.update(
+                        {
+                            CONF_HUBITAT_URI: hubitat_data["uri"],
+                            CONF_HUBITAT_TOKEN: hubitat_data["token"],
+                            CONF_HUBITAT_TYPE: hubitat_data.get("type"),
+                            CONF_HUBITAT_CONNECTION_TYPE: hubitat_data.get(
+                                "connectionType"
+                            ),
+                        }
+                    )
+
+            if not errors:
+                try:
+                    await self._async_push_selected_entities_to_hubitat(options)
+                except PairingError as err:
+                    errors["base"] = str(err)
+
+            if not errors:
+                return self.async_create_entry(title="", data=options)
 
         schema = vol.Schema(
             {
@@ -123,7 +147,16 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
                         "http://192.168.7.70:8123",
                     ),
                 ): str,
-                vol.Required(CONF_HUBITAT_CONNECTION_KEY): str,
+                vol.Optional(CONF_HUBITAT_CONNECTION_KEY, default=""): str,
+                vol.Optional(
+                    CONF_EXPORTED_ENTITY_IDS,
+                    default=self._config_entry.options.get(
+                        CONF_EXPORTED_ENTITY_IDS,
+                        [],
+                    ),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(multiple=True)
+                ),
             }
         )
 
@@ -131,4 +164,40 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=schema,
             errors=errors,
+        )
+
+    async def _async_push_selected_entities_to_hubitat(
+        self,
+        options: dict[str, Any],
+    ) -> None:
+        """Push selected Home Assistant entities to Hubitat."""
+
+        hubitat_uri = options.get(CONF_HUBITAT_URI)
+        hubitat_token = options.get(CONF_HUBITAT_TOKEN)
+        if not hubitat_uri or not hubitat_token:
+            return
+
+        selected_entity_ids = options.get(CONF_EXPORTED_ENTITY_IDS, [])
+        payloads = build_devices_payload(self.hass, selected_entity_ids)
+        cleanup_ids = [
+            device["id"]
+            for payload in payloads
+            for device in payload["devices"]
+        ]
+
+        for payload in payloads:
+            await async_post_to_hubitat(
+                self.hass,
+                hubitat_uri,
+                hubitat_token,
+                "/devices/save",
+                payload,
+            )
+
+        await async_post_to_hubitat(
+            self.hass,
+            hubitat_uri,
+            hubitat_token,
+            "/devices/save",
+            {"cleanupDevices": cleanup_ids},
         )

@@ -24,23 +24,23 @@ class EntityMapping:
 
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
     "energy": EntityMapping("energy", "energy"),
-    "humidity": EntityMapping("v_humidity", "humidity", "%"),
-    "illuminance": EntityMapping("v_illuminance", "illuminance"),
+    "humidity": EntityMapping("humidity", "humidity", "%"),
+    "illuminance": EntityMapping("illuminance", "illuminance"),
     "power": EntityMapping("power", "power", "W"),
-    "temperature": EntityMapping("v_temperature", "temperature"),
+    "temperature": EntityMapping("temperature", "temperature"),
 }
 
 BINARY_SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
-    "door": EntityMapping("v_contact", "contact"),
-    "garage_door": EntityMapping("v_contact", "contact"),
-    "gas": EntityMapping("v_co_detector", "carbonMonoxide"),
-    "moisture": EntityMapping("v_moisture", "water"),
-    "motion": EntityMapping("v_motion", "motion"),
-    "occupancy": EntityMapping("v_motion", "motion"),
-    "opening": EntityMapping("v_contact", "contact"),
-    "presence": EntityMapping("v_presence", "presence"),
-    "smoke": EntityMapping("v_smoke_detector", "smoke"),
-    "window": EntityMapping("v_contact", "contact"),
+    "door": EntityMapping("contact", "contact"),
+    "garage_door": EntityMapping("contact", "contact"),
+    "gas": EntityMapping("co_detector", "carbonMonoxide"),
+    "moisture": EntityMapping("moisture", "water"),
+    "motion": EntityMapping("motion", "motion"),
+    "occupancy": EntityMapping("motion", "motion"),
+    "opening": EntityMapping("contact", "contact"),
+    "presence": EntityMapping("presence", "presence"),
+    "smoke": EntityMapping("smoke_detector", "smoke"),
+    "window": EntityMapping("contact", "contact"),
 }
 
 
@@ -68,12 +68,19 @@ def get_entity_mapping(state: State) -> EntityMapping | None:
     return None
 
 
-def build_devices_payload(hass: HomeAssistant) -> list[dict[str, Any]]:
+def build_devices_payload(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Build a HubConnect /devices/get payload from current HA states."""
 
     grouped_devices: dict[str, list[dict[str, Any]]] = {}
+    selected_entity_ids = set(selected_entity_ids or [])
 
     for state in hass.states.async_all():
+        if state.entity_id not in selected_entity_ids:
+            continue
+
         if state.state in UNKNOWN_STATES:
             continue
 

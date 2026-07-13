@@ -80,6 +80,38 @@ async def async_pair_with_hubitat(
         raise PairingError(data.get("message") or "pairing_rejected")
 
 
+async def async_post_to_hubitat(
+    hass: HomeAssistant,
+    hubitat_uri: str,
+    hubitat_token: str,
+    path: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Post one HubConnect payload to Hubitat."""
+
+    url = _hubitat_url(hubitat_uri, path, hubitat_token)
+    session = async_get_clientsession(hass)
+
+    try:
+        response = await session.post(
+            url,
+            json=payload,
+            headers={"Authorization": f"Bearer {hubitat_token}"},
+            timeout=15,
+        )
+        data = await response.json(content_type=None)
+    except (ClientError, TimeoutError, ValueError) as err:
+        raise PairingError("cannot_connect") from err
+
+    if response.status != 200 or str(data.get("status")) not in {
+        "complete",
+        "success",
+    }:
+        raise PairingError(data.get("message") or "pairing_rejected")
+
+    return data
+
+
 def _hubitat_url(base_uri: str, path: str, token: str) -> str:
     """Build a Hubitat app URL with both path and query token auth."""
 

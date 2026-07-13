@@ -159,7 +159,13 @@ class HubConnectDevicesView(HubConnectView):
             return self._unauthorized()
 
         hass: HomeAssistant = request.app["hass"]
-        return self.json(build_devices_payload(hass))
+        runtime_data = self._runtime_data(request)
+        return self.json(
+            build_devices_payload(
+                hass,
+                runtime_data.exported_entity_ids if runtime_data else [],
+            )
+        )
 
 
 class HubConnectDeviceSyncView(HubConnectView):
@@ -296,7 +302,7 @@ class HubConnectTroubleshootingReportView(HubConnectView):
 
         hass: HomeAssistant = request.app["hass"]
         get_shadow_registry(hass).log_request("GET", request.path, "success")
-        device_count = len(build_devices_payload(hass))
+        device_count = len(build_devices_payload(hass, runtime_data.exported_entity_ids))
 
         return self.json(
             {
@@ -349,10 +355,16 @@ class HubConnectDevicesSaveView(HubConnectView):
         hass: HomeAssistant = request.app["hass"]
         data = await request.json()
         registry = get_shadow_registry(hass)
+        removed_unique_ids: list[str] = []
 
         if "cleanupDevices" in data:
-            registry.cleanup(data["cleanupDevices"])
-            detail = f"cleanup:{len(data['cleanupDevices'])}"
+            cleanup_device_ids = data["cleanupDevices"]
+            removed_unique_ids = registry.cleanup(cleanup_device_ids)
+            removed_unique_ids.extend(
+                _orphaned_unique_ids_for_cleanup(hass, cleanup_device_ids)
+            )
+            _async_remove_shadow_entities(hass, removed_unique_ids)
+            detail = f"cleanup:{len(cleanup_device_ids)} removed:{len(set(removed_unique_ids))}"
         elif data.get("deviceclass") and data.get("devices"):
             registry.upsert_devices(str(data["deviceclass"]), data["devices"])
             detail = f"{data['deviceclass']}:{len(data['devices'])}"
@@ -408,17 +420,24 @@ class HubConnectDeviceEventView(HubConnectView):
         )
         if live_entity is not None:
             live_entity.async_refresh_from_shadow()
+        else:
+            notify_shadow_devices_updated(hass)
+            async_call_later(
+                hass,
+                1,
+                lambda _: (
+                    _async_write_shadow_state(hass, unique_id),
+                    notify_shadow_entity_updated(hass, unique_id),
+                ),
+            )
         _async_write_shadow_state(hass, unique_id)
         notify_shadow_entity_updated(hass, unique_id)
         await sleep(0)
-        entity_id = _entity_id_for_unique_id(hass, unique_id)
-        live = hass.states.get(entity_id) if entity_id else None
-        live_state = live.state if live else "missing"
         registry.log_request(
             "GET",
             request.path,
             "complete",
-            f"{data.get('name')}={data.get('value')} live={live_state}",
+            f"{data.get('name')}={data.get('value')} live={_live_state_for_unique_id(hass, unique_id)}",
         )
         return self.json({"status": "complete"})
 
@@ -445,6 +464,66 @@ def _entity_id_for_unique_id(hass: HomeAssistant, unique_id: str) -> str | None:
         None,
     )
     return entry.entity_id if entry else None
+
+
+def _owning_entity_id_for_unique_id(hass: HomeAssistant, unique_id: str) -> str | None:
+    """Return the HA entity id that represents a shadow unique id."""
+
+    entity_id = _entity_id_for_unique_id(hass, unique_id)
+    if entity_id is not None:
+        return entity_id
+
+    registry = get_shadow_registry(hass)
+    description = registry.entities.get(unique_id)
+    if description is None or description.platform.value != "climate":
+        return None
+
+    return _entity_id_for_unique_id(hass, description.device_id)
+
+
+def _live_state_for_unique_id(hass: HomeAssistant, unique_id: str) -> str:
+    """Return the live HA state for an exact or owning shadow entity."""
+
+    entity_id = _owning_entity_id_for_unique_id(hass, unique_id)
+    state = hass.states.get(entity_id) if entity_id else None
+    return state.state if state else "missing"
+
+
+def _orphaned_unique_ids_for_cleanup(
+    hass: HomeAssistant,
+    device_ids: list[object],
+) -> list[str]:
+    """Return HubConnect registry unique ids excluded by a cleanup payload."""
+
+    keep_ids = {str(device_id) for device_id in device_ids}
+    entity_registry = er.async_get(hass)
+    return [
+        str(entry.unique_id)
+        for entry in entity_registry.entities.values()
+        if entry.platform == DOMAIN
+        and str(entry.unique_id).split("_", 1)[0] not in keep_ids
+    ]
+
+
+def _async_remove_shadow_entities(
+    hass: HomeAssistant,
+    removed_unique_ids: list[str],
+) -> None:
+    """Remove HA state and registry entries for discarded shadow entities."""
+
+    removed_unique_ids = sorted(set(removed_unique_ids))
+    if not removed_unique_ids:
+        return
+
+    entity_registry = er.async_get(hass)
+    live_entities = hass.data.get(DOMAIN, {}).get("_shadow_entities", {})
+
+    for unique_id in removed_unique_ids:
+        entity_id = _entity_id_for_unique_id(hass, unique_id)
+        live_entities.pop(unique_id, None)
+        if entity_id is not None:
+            hass.states.async_remove(entity_id)
+            entity_registry.async_remove(entity_id)
 
 
 def _async_write_shadow_state(hass: HomeAssistant, unique_id: str) -> None:
@@ -506,7 +585,21 @@ class HubConnectShadowDebugView(HubConnectView):
         hubconnect_entity_ids = {
             entry.entity_id for entry in hubconnect_entries.values()
         }
+        shadow_unique_ids = set(registry.entities)
+        shadow_device_ids = {
+            entity.device_id for entity in registry.entities.values()
+        }
+        orphaned_entries = {
+            unique_id: entry
+            for unique_id, entry in hubconnect_entries.items()
+            if unique_id not in shadow_unique_ids and unique_id not in shadow_device_ids
+        }
         live_entities = hass.data.get(DOMAIN, {}).get("_shadow_entities", {})
+        orphaned_live_entities = sorted(
+            unique_id
+            for unique_id in live_entities
+            if unique_id not in shadow_unique_ids and unique_id not in shadow_device_ids
+        )
         return self.json(
             {
                 "status": "success",
@@ -524,7 +617,19 @@ class HubConnectShadowDebugView(HubConnectView):
                     for entry in entity_registry.entities.values()
                     if entry.platform == DOMAIN
                 ],
+                "orphaned_entity_registry": [
+                    {
+                        "entity_id": entry.entity_id,
+                        "unique_id": entry.unique_id,
+                        "disabled_by": entry.disabled_by,
+                        "state": hass.states.get(entry.entity_id).state
+                        if hass.states.get(entry.entity_id)
+                        else "missing",
+                    }
+                    for entry in orphaned_entries.values()
+                ],
                 "live_entities": sorted(live_entities),
+                "orphaned_live_entities": orphaned_live_entities,
                 "shadow_states": [
                     {
                         "unique_id": unique_id,

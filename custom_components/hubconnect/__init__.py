@@ -18,6 +18,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
+    CONF_EXPORTED_ENTITY_IDS,
     CONF_HUBITAT_CONNECTION_TYPE,
     CONF_HUBITAT_TOKEN,
     CONF_HUBITAT_TYPE,
@@ -42,6 +43,7 @@ class HubConnectRuntimeData:
     hubitat_token: str | None
     hubitat_type: str | None
     hubitat_connection_type: str | None
+    exported_entity_ids: tuple[str, ...]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -56,6 +58,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hubitat_token=entry.options.get(CONF_HUBITAT_TOKEN),
         hubitat_type=entry.options.get(CONF_HUBITAT_TYPE),
         hubitat_connection_type=entry.options.get(CONF_HUBITAT_CONNECTION_TYPE),
+        exported_entity_ids=tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, [])),
     )
 
     await async_load_shadow_registry(hass)

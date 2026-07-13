@@ -24,10 +24,11 @@
     "step": {
       "init": {
         "title": "Hubitat pairing",
-        "description": "Paste the connection key from the Hubitat HubConnect Server Instance.",
+        "description": "Pair with Hubitat and select which Home Assistant entities Hubitat may import.",
         "data": {
+          "exported_entity_ids": "Home Assistant entities to expose to Hubitat",
           "ha_base_url": "Home Assistant base URL",
-          "hubitat_connection_key": "Hubitat connection key"
+          "hubitat_connection_key": "Hubitat connection key (optional after pairing)"
         }
       }
     }

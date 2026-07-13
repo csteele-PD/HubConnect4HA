@@ -119,15 +119,21 @@ class ShadowRegistry:
                         unit=unit,
                     )
 
-    def cleanup(self, device_ids: list[Any]) -> None:
+    def cleanup(self, device_ids: list[Any]) -> list[str]:
         """Remove shadow entities not in Hubitat's cleanup list."""
 
         keep_ids = {str(device_id) for device_id in device_ids}
+        removed_unique_ids = [
+            unique_id
+            for unique_id, entity in self.entities.items()
+            if entity.device_id not in keep_ids
+        ]
         self.entities = {
             unique_id: entity
             for unique_id, entity in self.entities.items()
             if entity.device_id in keep_ids
         }
+        return removed_unique_ids
 
     def update_event(self, device_id: str, event: dict[str, Any]) -> bool:
         """Update a shadow entity from a HubConnect event payload."""
@@ -136,7 +142,25 @@ class ShadowRegistry:
         unique_id = f"{device_id}_{attribute}"
         entity = self.entities.get(unique_id)
         if entity is None:
-            return False
+            device_entities = [
+                entity
+                for entity in self.entities.values()
+                if entity.device_id == str(device_id)
+            ]
+            if not device_entities:
+                return False
+
+            existing = device_entities[0]
+            entity = ShadowEntityDescription(
+                device_id=str(device_id),
+                device_class=existing.device_class,
+                label=str(event.get("displayName") or existing.label),
+                attribute=attribute,
+                value=event.get("value"),
+                unit=normalize_unit(attribute, event.get("unit")),
+            )
+            self.entities[unique_id] = entity
+            return True
 
         entity.value = event.get("value")
         entity.unit = normalize_unit(attribute, event.get("unit")) or entity.unit
