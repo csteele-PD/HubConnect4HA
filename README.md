@@ -2,7 +2,7 @@
 
 Experimental Home Assistant custom integration that aims to act as a HubConnect remote endpoint for a Hubitat HubConnect Server Instance.
 
-This repository is in early protocol-discovery and test-build shape. The current integration only proves that Home Assistant can load the custom component and answer a few HubConnect-style HTTP endpoints.
+This repository is in early protocol-discovery and test-build shape. The current integration can pair Home Assistant as a HubConnect remote client, accept Hubitat-selected devices, create persistent Home Assistant shadow entities, and update those entities from live Hubitat events.
 
 ## First Local Test
 
@@ -29,6 +29,18 @@ Expected response:
 
 ```json
 {"status":"received"}
+```
+
+Hubitat pairing and device selection currently exercise these key endpoints:
+
+```text
+GET  /api/hubconnect/ping
+GET  /api/hubconnect/system/versions/get
+GET  /api/hubconnect/system/tsreport/get
+POST /api/hubconnect/system/drivers/save
+GET  /api/hubconnect/devices/get
+POST /api/hubconnect/devices/save
+GET  /api/hubconnect/device/{device_id}/event/{event_json}
 ```
 
 The first inventory endpoint is also available:
@@ -60,6 +72,9 @@ HACS -> three-dot menu -> Custom repositories
 
 Use the repository URL and choose `Integration` as the category.
 
-## Reference Material
+## External References
 
-`ReferenceMaterial/` contains source used to understand HubConnect's existing protocol. It is not part of the Home Assistant integration package.
+Useful references for future mapping work:
+
+- `danTapps/homebridge-hubitat-hubconnect` for HubConnect remote endpoint behavior and device mapping ideas.
+- `jason0x43/hacs-hubitat` for Home Assistant-native Hubitat entity conventions.

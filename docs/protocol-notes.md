@@ -4,20 +4,32 @@ These notes describe the HTTP surface the Home Assistant integration needs to em
 
 ## Initial Endpoint Set
 
-The first implementation should support these HubConnect remote-client routes:
+The current prototype supports these HubConnect remote-client routes:
 
 ```text
 GET  /api/hubconnect/ping
 GET  /api/hubconnect/system/versions/get
+GET  /api/hubconnect/system/tsreport/get
+POST /api/hubconnect/system/drivers/save
 GET  /api/hubconnect/modes/get
 GET  /api/hubconnect/devices/get
 GET  /api/hubconnect/device/{device_id}/sync/{device_class}
+GET  /api/hubconnect/device/{device_id}/event/{event_json}
 GET  /api/hubconnect/event/{device_id}/{device_command}/{command_params}
 GET  /api/hubconnect/modes/set/{name}
 POST /api/hubconnect/devices/save
 ```
 
 The route prefix is Home Assistant-specific. Hubitat will need a client URI that points at `http://HOME_ASSISTANT:8123/api/hubconnect`.
+
+`devices/save` creates persistent Home Assistant shadow entities for Hubitat-selected devices. Device resends are idempotent enough for current testing and preserve existing shadow objects so live event updates do not lag by one event.
+
+## Reference Implementations
+
+Use both protocol-native and Home Assistant-native references when expanding support:
+
+- Dan Tapps' `danTapps/homebridge-hubitat-hubconnect` for a Node.js HubConnect remote endpoint and HubConnect-to-platform device mapping behavior.
+- Jason 0x43's `jason0x43/hacs-hubitat` for Home Assistant entity/platform conventions.
 
 ## First Device Classes To Map
 
@@ -46,3 +58,5 @@ HubConnect device events are URL-encoded JSON objects:
   "data": ""
 }
 ```
+
+The event handler updates the persistent shadow state and writes the corresponding Home Assistant entity state directly through the entity registry. That direct state write is a prototype decision to revisit before hardening the integration.
