@@ -1,0 +1,227 @@
+"""Helpers for translating Home Assistant state into HubConnect payloads."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from typing import Any
+from urllib.parse import unquote
+
+from homeassistant.core import HomeAssistant, State
+
+
+UNKNOWN_STATES = {"unknown", "unavailable"}
+
+
+@dataclass(frozen=True, slots=True)
+class EntityMapping:
+    """HubConnect mapping for a Home Assistant entity."""
+
+    device_class: str
+    attribute: str
+    unit: str = ""
+
+
+SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
+    "energy": EntityMapping("energy", "energy"),
+    "humidity": EntityMapping("v_humidity", "humidity", "%"),
+    "illuminance": EntityMapping("v_illuminance", "illuminance"),
+    "power": EntityMapping("power", "power", "W"),
+    "temperature": EntityMapping("v_temperature", "temperature"),
+}
+
+BINARY_SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
+    "door": EntityMapping("v_contact", "contact"),
+    "garage_door": EntityMapping("v_contact", "contact"),
+    "gas": EntityMapping("v_co_detector", "carbonMonoxide"),
+    "moisture": EntityMapping("v_moisture", "water"),
+    "motion": EntityMapping("v_motion", "motion"),
+    "occupancy": EntityMapping("v_motion", "motion"),
+    "opening": EntityMapping("v_contact", "contact"),
+    "presence": EntityMapping("v_presence", "presence"),
+    "smoke": EntityMapping("v_smoke_detector", "smoke"),
+    "window": EntityMapping("v_contact", "contact"),
+}
+
+
+def get_entity_mapping(state: State) -> EntityMapping | None:
+    """Return the HubConnect mapping for a Home Assistant state."""
+
+    domain = state.entity_id.split(".", 1)[0]
+    device_class = state.attributes.get("device_class")
+
+    if domain == "switch":
+        return EntityMapping("switch", "switch")
+
+    if domain == "light":
+        supported_color_modes = state.attributes.get("supported_color_modes") or set()
+        if "brightness" in supported_color_modes:
+            return EntityMapping("dimmer", "switch")
+        return EntityMapping("switch", "switch")
+
+    if domain == "sensor" and isinstance(device_class, str):
+        return SENSOR_DEVICE_CLASS_MAP.get(device_class)
+
+    if domain == "binary_sensor" and isinstance(device_class, str):
+        return BINARY_SENSOR_DEVICE_CLASS_MAP.get(device_class)
+
+    return None
+
+
+def build_devices_payload(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Build a HubConnect /devices/get payload from current HA states."""
+
+    grouped_devices: dict[str, list[dict[str, Any]]] = {}
+
+    for state in hass.states.async_all():
+        if state.state in UNKNOWN_STATES:
+            continue
+
+        mapping = get_entity_mapping(state)
+        if mapping is None:
+            continue
+
+        grouped_devices.setdefault(mapping.device_class, []).append(
+            {
+                "id": state.entity_id,
+                "label": friendly_name(state),
+                "attr": [build_attribute_payload(state, mapping)],
+                "commands": build_command_payload(state),
+            }
+        )
+
+    return [
+        {"deviceclass": device_class, "devices": devices}
+        for device_class, devices in sorted(grouped_devices.items())
+    ]
+
+
+def build_sync_payload(state: State, requested_device_class: str) -> dict[str, Any]:
+    """Build a HubConnect device sync payload."""
+
+    mapping = get_entity_mapping(state)
+    if mapping is None:
+        return {"status": "error", "message": "unsupported device"}
+
+    if requested_device_class != mapping.device_class:
+        return {"status": "error", "message": "device class mismatch"}
+
+    return {
+        "status": "success",
+        "name": state.entity_id,
+        "label": friendly_name(state),
+        "currentValues": [build_attribute_payload(state, mapping)],
+    }
+
+
+def build_attribute_payload(state: State, mapping: EntityMapping) -> dict[str, Any]:
+    """Build one HubConnect attribute payload."""
+
+    return {
+        "name": mapping.attribute,
+        "value": hubconnect_value(state, mapping),
+        "unit": state.attributes.get("unit_of_measurement") or mapping.unit,
+    }
+
+
+def hubconnect_value(state: State, mapping: EntityMapping) -> str:
+    """Translate HA state values into HubConnect attribute values."""
+
+    if state.state in UNKNOWN_STATES:
+        return state.state
+
+    if mapping.attribute == "contact":
+        return "open" if state.state == "on" else "closed"
+
+    if mapping.attribute in {"motion", "acceleration"}:
+        return "active" if state.state == "on" else "inactive"
+
+    if mapping.attribute == "presence":
+        return "present" if state.state == "on" else "not present"
+
+    if mapping.attribute == "water":
+        return "wet" if state.state == "on" else "dry"
+
+    if mapping.attribute in {"smoke", "carbonMonoxide"}:
+        return "detected" if state.state == "on" else "clear"
+
+    return state.state
+
+
+def build_command_payload(state: State) -> dict[str, list[dict[str, Any]]]:
+    """Return a minimal HubConnect command map for an HA entity."""
+
+    domain = state.entity_id.split(".", 1)[0]
+
+    if domain in {"switch", "light"}:
+        return {"on": [], "off": []}
+
+    return {}
+
+
+async def async_execute_command(
+    hass: HomeAssistant,
+    entity_id: str,
+    command: str,
+    encoded_params: str,
+) -> dict[str, str]:
+    """Execute a HubConnect command against a Home Assistant entity."""
+
+    state = hass.states.get(entity_id)
+    if state is None:
+        return {"status": "error", "message": "device not found"}
+
+    if command == "uninstalled":
+        return {"status": "success"}
+
+    mapping = get_entity_mapping(state)
+    if mapping is None:
+        return {"status": "error", "message": "unsupported device"}
+
+    domain = entity_id.split(".", 1)[0]
+
+    if command in {"on", "off"} and domain in {"switch", "light"}:
+        await hass.services.async_call(
+            "homeassistant",
+            f"turn_{command}",
+            {"entity_id": entity_id},
+            blocking=True,
+        )
+        return {"status": "success"}
+
+    if command == "setLevel" and domain == "light":
+        params = _decode_command_params(encoded_params)
+        if not params:
+            return {"status": "error", "message": "missing level"}
+
+        level = max(0, min(100, int(params[0])))
+        brightness = round(level * 255 / 100)
+        await hass.services.async_call(
+            "light",
+            "turn_on",
+            {"entity_id": entity_id, "brightness": brightness},
+            blocking=True,
+        )
+        return {"status": "success"}
+
+    return {"status": "error", "message": f"unsupported command: {command}"}
+
+
+def _decode_command_params(encoded_params: str) -> list[Any]:
+    """Decode HubConnect command params from a URL path segment."""
+
+    if encoded_params == "null":
+        return []
+
+    decoded = unquote(encoded_params)
+    params = json.loads(decoded)
+    if isinstance(params, list):
+        return params
+
+    return []
+
+
+def friendly_name(state: State) -> str:
+    """Return the best display name for an HA state."""
+
+    return state.attributes.get("friendly_name") or state.entity_id

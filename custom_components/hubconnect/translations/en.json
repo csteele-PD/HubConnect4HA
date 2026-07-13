@@ -1,0 +1,35 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HubConnect",
+        "description": "Create a local HubConnect endpoint for a Hubitat HubConnect Server Instance.",
+        "data": {
+          "remote_name": "Remote name",
+          "token": "Bearer token"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "HubConnect is already configured."
+    },
+    "error": {
+      "cannot_connect": "Home Assistant could not connect to the Hubitat HubConnect server instance.",
+      "invalid_connection_key": "The Hubitat connection key is invalid.",
+      "pairing_rejected": "Hubitat rejected the pairing request.",
+      "wrong_platform": "This connection key is for SmartThings, not this endpoint."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hubitat pairing",
+        "description": "Paste the connection key from the Hubitat HubConnect Server Instance.",
+        "data": {
+          "ha_base_url": "Home Assistant base URL",
+          "hubitat_connection_key": "Hubitat connection key"
+        }
+      }
+    }
+  }
+}
