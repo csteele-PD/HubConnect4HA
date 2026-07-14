@@ -63,6 +63,7 @@ class ShadowRegistry:
     entities: dict[str, ShadowEntityDescription] = field(default_factory=dict)
     requests: list[dict[str, Any]] = field(default_factory=list)
     platform_events: list[dict[str, Any]] = field(default_factory=list)
+    export_pushes: list[dict[str, Any]] = field(default_factory=list)
 
     def log_request(self, method: str, path: str, status: str, detail: str = "") -> None:
         """Store a small in-memory request log."""
@@ -92,6 +93,28 @@ class ShadowRegistry:
             }
         )
         self.platform_events = self.platform_events[-50:]
+
+    def log_export_push(
+        self,
+        target: str,
+        status: str,
+        detail: str = "",
+        payload: dict[str, Any] | None = None,
+        response: dict[str, Any] | None = None,
+    ) -> None:
+        """Store a small in-memory log of HA-to-Hubitat export pushes."""
+
+        self.export_pushes.append(
+            {
+                "time": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                "target": target,
+                "status": status,
+                "detail": detail,
+                "payload": payload,
+                "response": response,
+            }
+        )
+        self.export_pushes = self.export_pushes[-50:]
 
     def upsert_devices(self, device_class: str, devices: list[dict[str, Any]]) -> None:
         """Create or update shadow entities from HubConnect devices/save data."""

@@ -14,7 +14,13 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import DOMAIN, HTTP_BASE
 from .pairing import PairingError, async_pair_with_hubitat, decode_connection_key
-from .protocol import async_execute_command, build_devices_payload, build_sync_payload
+from .protocol import (
+    async_execute_command,
+    build_devices_payload,
+    build_export_requirements,
+    build_sync_payload,
+    build_unsupported_exports,
+)
 from .shadow import (
     get_shadow_registry,
     async_save_shadow_registry,
@@ -575,6 +581,7 @@ class HubConnectShadowDebugView(HubConnectView):
             return self._unauthorized()
 
         hass: HomeAssistant = request.app["hass"]
+        runtime_data = self._runtime_data(request)
         registry = get_shadow_registry(hass)
         entity_registry = er.async_get(hass)
         hubconnect_entries = {
@@ -607,6 +614,24 @@ class HubConnectShadowDebugView(HubConnectView):
                 "entities": registry.as_dict(),
                 "requests": registry.requests,
                 "platform_events": registry.platform_events,
+                "ha_export": {
+                    "selected_entity_ids": list(runtime_data.exported_entity_ids)
+                    if runtime_data
+                    else [],
+                    "current_payload": build_devices_payload(
+                        hass,
+                        runtime_data.exported_entity_ids if runtime_data else [],
+                    ),
+                    "required_drivers": build_export_requirements(
+                        hass,
+                        runtime_data.exported_entity_ids if runtime_data else [],
+                    ),
+                    "unsupported_entities": build_unsupported_exports(
+                        hass,
+                        runtime_data.exported_entity_ids if runtime_data else [],
+                    ),
+                    "pushes": registry.export_pushes,
+                },
                 "entity_registry": [
                     {
                         "entity_id": entry.entity_id,

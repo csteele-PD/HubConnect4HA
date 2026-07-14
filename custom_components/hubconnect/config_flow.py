@@ -30,6 +30,7 @@ from .pairing import (
     decode_connection_key,
 )
 from .protocol import build_devices_payload
+from .shadow import get_shadow_registry
 
 
 class HubConnectConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -184,20 +185,58 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
             for payload in payloads
             for device in payload["devices"]
         ]
+        registry = get_shadow_registry(self.hass)
 
         for payload in payloads:
-            await async_post_to_hubitat(
+            try:
+                response = await async_post_to_hubitat(
+                    self.hass,
+                    hubitat_uri,
+                    hubitat_token,
+                    "/devices/save",
+                    payload,
+                )
+            except PairingError as err:
+                registry.log_export_push(
+                    f"{hubitat_uri.rstrip('/')}/devices/save",
+                    "error",
+                    str(err),
+                    payload,
+                    err.response,
+                )
+                raise
+
+            registry.log_export_push(
+                f"{hubitat_uri.rstrip('/')}/devices/save",
+                "complete",
+                f"{payload['deviceclass']}:{len(payload['devices'])}",
+                payload,
+                response,
+            )
+
+        cleanup_payload = {"cleanupDevices": cleanup_ids}
+        try:
+            response = await async_post_to_hubitat(
                 self.hass,
                 hubitat_uri,
                 hubitat_token,
                 "/devices/save",
-                payload,
+                cleanup_payload,
             )
+        except PairingError as err:
+            registry.log_export_push(
+                f"{hubitat_uri.rstrip('/')}/devices/save",
+                "error",
+                str(err),
+                cleanup_payload,
+                err.response,
+            )
+            raise
 
-        await async_post_to_hubitat(
-            self.hass,
-            hubitat_uri,
-            hubitat_token,
-            "/devices/save",
-            {"cleanupDevices": cleanup_ids},
+        registry.log_export_push(
+            f"{hubitat_uri.rstrip('/')}/devices/save",
+            "complete",
+            f"cleanup:{len(cleanup_ids)}",
+            cleanup_payload,
+            response,
         )

@@ -22,24 +22,57 @@ class EntityMapping:
     unit: str = ""
 
 
+# HubConnect deviceclass keys must match the Groovy NATIVE_DEVICES table. Prefer
+# standard mirror drivers when they exist; use v_* only for standalone synthetic
+# measurements where HubConnect has no plain native class.
+HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
+    "contact": {"contact", "temperature", "battery"},
+    "dimmer": {"switch", "level"},
+    "energy": {"energy"},
+    "moisture": {"water", "temperature", "battery"},
+    "motion": {"motion", "temperature", "battery"},
+    "power": {"power"},
+    "presence": {"presence", "battery"},
+    "smoke": {"smoke", "carbonMonoxide", "battery"},
+    "switch": {"switch"},
+    "v_humidity": {"humidity"},
+    "v_illuminance": {"illuminance"},
+    "v_temperature": {"temperature"},
+}
+
+HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
+    "contact": "HubConnect Contact Sensor",
+    "dimmer": "HubConnect Dimmer",
+    "energy": "HubConnect Energy Meter",
+    "moisture": "HubConnect Moisture Sensor",
+    "motion": "HubConnect Motion Sensor",
+    "power": "HubConnect Power Meter",
+    "presence": "HubConnect Presence Sensor",
+    "smoke": "HubConnect SmokeCO",
+    "switch": "HubConnect Switch",
+    "v_humidity": "HubConnect Virtual Virtual Humidity Sensor",
+    "v_illuminance": "HubConnect Virtual Illuminance Sensor",
+    "v_temperature": "HubConnect Virtual Temperature Sensor",
+}
+
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
     "energy": EntityMapping("energy", "energy"),
-    "humidity": EntityMapping("humidity", "humidity", "%"),
-    "illuminance": EntityMapping("illuminance", "illuminance"),
+    "humidity": EntityMapping("v_humidity", "humidity", "%"),
+    "illuminance": EntityMapping("v_illuminance", "illuminance"),
     "power": EntityMapping("power", "power", "W"),
-    "temperature": EntityMapping("temperature", "temperature"),
+    "temperature": EntityMapping("v_temperature", "temperature"),
 }
 
 BINARY_SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
     "door": EntityMapping("contact", "contact"),
     "garage_door": EntityMapping("contact", "contact"),
-    "gas": EntityMapping("co_detector", "carbonMonoxide"),
+    "gas": EntityMapping("smoke", "carbonMonoxide"),
     "moisture": EntityMapping("moisture", "water"),
     "motion": EntityMapping("motion", "motion"),
     "occupancy": EntityMapping("motion", "motion"),
     "opening": EntityMapping("contact", "contact"),
     "presence": EntityMapping("presence", "presence"),
-    "smoke": EntityMapping("smoke_detector", "smoke"),
+    "smoke": EntityMapping("smoke", "smoke"),
     "window": EntityMapping("contact", "contact"),
 }
 
@@ -51,21 +84,34 @@ def get_entity_mapping(state: State) -> EntityMapping | None:
     device_class = state.attributes.get("device_class")
 
     if domain == "switch":
-        return EntityMapping("switch", "switch")
+        return _validated_mapping(EntityMapping("switch", "switch"))
 
     if domain == "light":
         supported_color_modes = state.attributes.get("supported_color_modes") or set()
         if "brightness" in supported_color_modes:
-            return EntityMapping("dimmer", "switch")
-        return EntityMapping("switch", "switch")
+            return _validated_mapping(EntityMapping("dimmer", "switch"))
+        return _validated_mapping(EntityMapping("switch", "switch"))
 
     if domain == "sensor" and isinstance(device_class, str):
-        return SENSOR_DEVICE_CLASS_MAP.get(device_class)
+        return _validated_mapping(SENSOR_DEVICE_CLASS_MAP.get(device_class))
 
     if domain == "binary_sensor" and isinstance(device_class, str):
-        return BINARY_SENSOR_DEVICE_CLASS_MAP.get(device_class)
+        return _validated_mapping(BINARY_SENSOR_DEVICE_CLASS_MAP.get(device_class))
 
     return None
+
+
+def _validated_mapping(mapping: EntityMapping | None) -> EntityMapping | None:
+    """Return a mapping only when HubConnect can resolve its class/attribute."""
+
+    if mapping is None:
+        return None
+
+    allowed_attributes = HUBCONNECT_EXPORT_ATTRIBUTES.get(mapping.device_class)
+    if allowed_attributes is None or mapping.attribute not in allowed_attributes:
+        return None
+
+    return mapping
 
 
 def build_devices_payload(
@@ -101,6 +147,100 @@ def build_devices_payload(
         {"deviceclass": device_class, "devices": devices}
         for device_class, devices in sorted(grouped_devices.items())
     ]
+
+
+def build_export_requirements(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Build required HubConnect driver details for selected HA exports."""
+
+    requirements: dict[str, dict[str, Any]] = {}
+
+    for state in _selected_states(hass, selected_entity_ids):
+        if state.state in UNKNOWN_STATES:
+            continue
+
+        mapping = get_entity_mapping(state)
+        if mapping is None:
+            continue
+
+        requirement = requirements.setdefault(
+            mapping.device_class,
+            {
+                "deviceclass": mapping.device_class,
+                "driver": HUBCONNECT_EXPORT_DRIVERS[mapping.device_class],
+                "attributes": set(),
+                "entities": [],
+            },
+        )
+        requirement["attributes"].add(mapping.attribute)
+        requirement["entities"].append(
+            {
+                "entity_id": state.entity_id,
+                "label": friendly_name(state),
+                "attribute": mapping.attribute,
+            }
+        )
+
+    return [
+        {
+            **requirement,
+            "attributes": sorted(requirement["attributes"]),
+            "entities": sorted(
+                requirement["entities"],
+                key=lambda entity: entity["entity_id"],
+            ),
+        }
+        for requirement in sorted(
+            requirements.values(),
+            key=lambda requirement: requirement["deviceclass"],
+        )
+    ]
+
+
+def build_unsupported_exports(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return selected HA entities that will not be exported."""
+
+    unsupported: list[dict[str, Any]] = []
+
+    for state in _selected_states(hass, selected_entity_ids):
+        reason = ""
+        if state.state in UNKNOWN_STATES:
+            reason = f"state is {state.state}"
+        elif get_entity_mapping(state) is None:
+            reason = "unsupported domain or device_class"
+
+        if reason:
+            unsupported.append(
+                {
+                    "entity_id": state.entity_id,
+                    "label": friendly_name(state),
+                    "domain": state.entity_id.split(".", 1)[0],
+                    "device_class": state.attributes.get("device_class"),
+                    "state": state.state,
+                    "reason": reason,
+                }
+            )
+
+    selected_ids = {str(entity_id) for entity_id in selected_entity_ids or []}
+    known_ids = {state.entity_id for state in hass.states.async_all()}
+    for entity_id in sorted(selected_ids - known_ids):
+        unsupported.append(
+            {
+                "entity_id": entity_id,
+                "label": entity_id,
+                "domain": entity_id.split(".", 1)[0],
+                "device_class": None,
+                "state": "missing",
+                "reason": "entity not found",
+            }
+        )
+
+    return sorted(unsupported, key=lambda entity: entity["entity_id"])
 
 
 def build_sync_payload(state: State, requested_device_class: str) -> dict[str, Any]:
@@ -232,3 +372,17 @@ def friendly_name(state: State) -> str:
     """Return the best display name for an HA state."""
 
     return state.attributes.get("friendly_name") or state.entity_id
+
+
+def _selected_states(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[State]:
+    """Return HA states matching selected entity ids."""
+
+    selected_ids = {str(entity_id) for entity_id in selected_entity_ids or []}
+    return [
+        state
+        for state in hass.states.async_all()
+        if state.entity_id in selected_ids
+    ]

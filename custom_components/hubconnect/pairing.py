@@ -16,6 +16,16 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 class PairingError(ValueError):
     """Raised when HubConnect pairing fails."""
 
+    def __init__(
+        self,
+        message: str,
+        response: dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize the pairing error."""
+
+        super().__init__(message)
+        self.response = response
+
 
 def decode_connection_key(connection_key: str) -> dict[str, Any]:
     """Decode a HubConnect server connection key."""
@@ -103,11 +113,12 @@ async def async_post_to_hubitat(
     except (ClientError, TimeoutError, ValueError) as err:
         raise PairingError("cannot_connect") from err
 
+    data["_http_status"] = response.status
     if response.status != 200 or str(data.get("status")) not in {
         "complete",
         "success",
     }:
-        raise PairingError(data.get("message") or "pairing_rejected")
+        raise PairingError(data.get("message") or "pairing_rejected", data)
 
     return data
 
