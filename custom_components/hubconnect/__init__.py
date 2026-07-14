@@ -65,15 +65,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_http_views(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    if entry.options.get(CONF_HUBITAT_URI) and entry.options.get(CONF_HUBITAT_TOKEN):
-        entry.async_on_unload(
-            async_track_time_interval(
-                hass,
-                lambda _: hass.async_create_task(_async_ping_hubitat(hass, entry)),
-                timedelta(minutes=1),
-            )
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            lambda _: hass.async_create_task(_async_ping_hubitat(hass, entry)),
+            timedelta(minutes=1),
         )
-        hass.async_create_task(_async_ping_hubitat(hass, entry))
+    )
+    hass.async_create_task(_async_ping_hubitat(hass, entry))
     return True
 
 
