@@ -28,6 +28,13 @@ from .shadow import (
     notify_shadow_entity_updated,
 )
 
+APP_VERSION = {
+    "platform": "Home Assistant",
+    "major": 0,
+    "minor": 0,
+    "build": 1,
+}
+
 
 def async_register_http_views(hass: HomeAssistant) -> None:
     """Register HubConnect HTTP views once."""
@@ -124,12 +131,7 @@ class HubConnectVersionsView(HubConnectView):
                 "apps": [
                     {
                         "appName": "HubConnect for Home Assistant",
-                        "appVersion": {
-                            "platform": "Home Assistant",
-                            "major": 0,
-                            "minor": 0,
-                            "build": 1,
-                        },
+                        "appVersion": APP_VERSION,
                     }
                 ],
                 "drivers": {},
@@ -314,8 +316,8 @@ class HubConnectTroubleshootingReportView(HubConnectView):
             {
                 "app": {
                     "appId": runtime_data.entry_id,
-                    "appVersion": "0.0.1",
-                    "installedVersion": "0.0.1",
+                    "appVersion": APP_VERSION,
+                    "installedVersion": APP_VERSION,
                 },
                 "prefs": {
                     "thisClientName": runtime_data.remote_name,
