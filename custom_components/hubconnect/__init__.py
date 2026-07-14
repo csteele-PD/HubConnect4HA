@@ -29,7 +29,7 @@ from .const import (
     PLATFORMS,
 )
 from .http import async_register_http_views
-from .shadow import async_load_shadow_registry
+from .shadow import async_load_shadow_registry, get_shadow_registry
 
 
 @dataclass(slots=True)
@@ -96,18 +96,43 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 async def _async_ping_hubitat(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Send the HubConnect health ping to Hubitat."""
 
-    hubitat_uri = entry.options.get(CONF_HUBITAT_URI)
-    hubitat_token = entry.options.get(CONF_HUBITAT_TOKEN)
+    runtime_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    hubitat_uri = (
+        getattr(runtime_data, "hubitat_uri", None)
+        or entry.options.get(CONF_HUBITAT_URI)
+    )
+    hubitat_token = (
+        getattr(runtime_data, "hubitat_token", None)
+        or entry.options.get(CONF_HUBITAT_TOKEN)
+    )
     if not hubitat_uri or not hubitat_token:
+        get_shadow_registry(hass).log_request(
+            "GET",
+            "/hubitat/ping",
+            "skipped",
+            "missing hubitat uri/token",
+        )
         return
 
     url = f"{hubitat_uri.rstrip('/')}/ping?access_token={hubitat_token}"
     session = async_get_clientsession(hass)
     try:
-        await session.get(
+        response = await session.get(
             url,
             headers={"Authorization": f"Bearer {hubitat_token}"},
             timeout=10,
         )
     except (ClientError, TimeoutError):
+        get_shadow_registry(hass).log_request(
+            "GET",
+            "/hubitat/ping",
+            "error",
+            hubitat_uri,
+        )
         return
+    get_shadow_registry(hass).log_request(
+        "GET",
+        "/hubitat/ping",
+        "complete" if response.status == 200 else "error",
+        f"{hubitat_uri} status={response.status}",
+    )
