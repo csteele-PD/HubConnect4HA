@@ -1,13 +1,13 @@
 {
   "domain": "hubconnect",
   "name": "HubConnect",
-  "codeowners": [],
+  "codeowners": ["@csteele-PD"],
   "config_flow": true,
   "dependencies": ["http"],
-  "documentation": "https://github.com/csteele/HubConnect4HA",
+  "documentation": "https://github.com/csteele-PD/HubConnect4HA",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/csteele/HubConnect4HA/issues",
+  "issue_tracker": "https://github.com/csteele-PD/HubConnect4HA/issues",
   "requirements": [],
   "version": "0.0.1"
 }
