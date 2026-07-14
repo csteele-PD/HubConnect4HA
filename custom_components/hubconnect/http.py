@@ -12,7 +12,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers import entity_registry as er
 
-from .const import DOMAIN, HTTP_BASE
+from .const import (
+    CONF_HUBITAT_CONNECTION_TYPE,
+    CONF_HUBITAT_TOKEN,
+    CONF_HUBITAT_TYPE,
+    CONF_HUBITAT_URI,
+    DOMAIN,
+    HTTP_BASE,
+)
 from .pairing import PairingError, async_pair_with_hubitat, decode_connection_key
 from .protocol import (
     async_execute_command,
@@ -270,6 +277,17 @@ class HubConnectSetConnectStringView(HubConnectView):
         runtime_data.hubitat_token = hubitat_data["token"]
         runtime_data.hubitat_type = hubitat_data.get("type")
         runtime_data.hubitat_connection_type = hubitat_data.get("connectionType")
+        if entry := hass.config_entries.async_get_entry(runtime_data.entry_id):
+            hass.config_entries.async_update_entry(
+                entry,
+                options={
+                    **entry.options,
+                    CONF_HUBITAT_URI: hubitat_data["uri"],
+                    CONF_HUBITAT_TOKEN: hubitat_data["token"],
+                    CONF_HUBITAT_TYPE: hubitat_data.get("type"),
+                    CONF_HUBITAT_CONNECTION_TYPE: hubitat_data.get("connectionType"),
+                },
+            )
 
         return self.json({"status": "success"})
 
