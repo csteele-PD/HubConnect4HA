@@ -4,6 +4,10 @@ Experimental Home Assistant custom integration that aims to act as a HubConnect 
 
 This repository is in early protocol-discovery and test-build shape. The current integration can pair Home Assistant as a HubConnect remote client, accept Hubitat-selected devices, create persistent Home Assistant shadow entities, and update those entities from live Hubitat events.
 
+The first bidirectional path is also working: selected Home Assistant entities can be exposed to Hubitat, Hubitat can create matching HubConnect devices, Hubitat can control exported Home Assistant switches, and deselected Home Assistant exports are cleaned up on the Hubitat side.
+
+See [docs/alpha-test-guide.md](docs/alpha-test-guide.md) for the current test matrix, supported HA export classes, driver requirements, and debug commands.
+
 ## First Local Test
 
 Copy `custom_components/hubconnect` into your Home Assistant config directory:
@@ -50,7 +54,14 @@ GET http://HOME_ASSISTANT:8123/api/hubconnect/devices/get
 Authorization: Bearer YOUR_TOKEN
 ```
 
-It exposes selected supported HA entities: switches, lights, temperature sensors, humidity sensors, illuminance sensors, power sensors, energy sensors, voltage sensors, and common binary sensors such as motion, contact, water, smoke, and presence. A future "all" mode should be an explicit selector choice, not implicit auto-export behavior.
+It exposes selected supported HA entities: switches, lights, temperature sensors, humidity sensors, illuminance sensors, power sensors, energy sensors, and common binary sensors such as motion, contact, water, smoke, and presence. A future "all" mode should be an explicit selector choice, not implicit auto-export behavior.
+
+Use the debug endpoint to inspect export requirements and push results:
+
+```text
+GET http://HOME_ASSISTANT:8123/api/hubconnect/system/shadows/get
+Authorization: Bearer YOUR_TOKEN
+```
 
 ## Pairing With Hubitat
 
