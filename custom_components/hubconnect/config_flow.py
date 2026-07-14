@@ -145,7 +145,7 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
                     CONF_HA_BASE_URL,
                     default=self._config_entry.options.get(
                         CONF_HA_BASE_URL,
-                        "http://192.168.7.70:8123",
+                        "http://homeassistant.local:8123",
                     ),
                 ): str,
                 vol.Optional(CONF_HUBITAT_CONNECTION_KEY, default=""): str,

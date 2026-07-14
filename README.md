@@ -78,7 +78,7 @@ In Home Assistant:
    example:
 
    ```text
-   http://192.168.7.70:8123
+   http://homeassistant.local:8123
    ```
 
 5. Select any Home Assistant entities you want to expose to Hubitat.
