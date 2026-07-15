@@ -7,15 +7,15 @@ Assistant remote endpoint.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import timedelta
 
 from aiohttp import ClientError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     CONF_EXPORTED_ENTITY_IDS,
@@ -44,13 +44,14 @@ class HubConnectRuntimeData:
     hubitat_type: str | None
     hubitat_connection_type: str | None
     exported_entity_ids: tuple[str, ...]
+    ping_task: asyncio.Task[None] | None = None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HubConnect from a config entry."""
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = HubConnectRuntimeData(
+    runtime_data = HubConnectRuntimeData(
         entry_id=entry.entry_id,
         remote_name=entry.data[CONF_REMOTE_NAME],
         token=entry.data[CONF_TOKEN],
@@ -60,19 +61,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hubitat_connection_type=entry.options.get(CONF_HUBITAT_CONNECTION_TYPE),
         exported_entity_ids=tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, [])),
     )
+    hass.data[DOMAIN][entry.entry_id] = runtime_data
 
     await async_load_shadow_registry(hass)
     async_register_http_views(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            lambda _: hass.async_create_task(_async_ping_hubitat(hass, entry)),
-            timedelta(minutes=1),
-        )
+    runtime_data.ping_task = hass.async_create_task(
+        _async_ping_hubitat_forever(hass, entry)
     )
-    hass.async_create_task(_async_ping_hubitat(hass, entry))
     return True
 
 
@@ -83,6 +80,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not unload_ok:
         return False
 
+    runtime_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime_data and runtime_data.ping_task:
+        runtime_data.ping_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await runtime_data.ping_task
+
     hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
 
@@ -91,6 +94,17 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     """Reload HubConnect when options change."""
 
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def _async_ping_hubitat_forever(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Keep Hubitat's remote-client health check alive."""
+
+    while True:
+        await _async_ping_hubitat(hass, entry)
+        await asyncio.sleep(60)
 
 
 async def _async_ping_hubitat(hass: HomeAssistant, entry: ConfigEntry) -> None:
