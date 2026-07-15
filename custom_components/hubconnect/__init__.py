@@ -199,6 +199,17 @@ async def _async_send_hubitat_state_event(
     if new_state.entity_id not in selected_entity_ids:
         return
 
+    get_shadow_registry(hass).log_request(
+        "GET",
+        "/hubitat/event",
+        "seen",
+        (
+            f"{new_state.entity_id} "
+            f"{old_state.state if isinstance(old_state, State) else None}"
+            f"->{new_state.state}"
+        ),
+    )
+
     mapping = get_entity_mapping(new_state)
     if mapping is None:
         get_shadow_registry(hass).log_request(
@@ -216,6 +227,12 @@ async def _async_send_hubitat_state_event(
             old_mapping == mapping
             and build_attribute_payload(old_state, mapping) == new_attribute
         ):
+            get_shadow_registry(hass).log_request(
+                "GET",
+                "/hubitat/event",
+                "skipped",
+                f"{new_state.entity_id} unchanged {new_attribute['name']}",
+            )
             return
 
     hubitat_uri = (
