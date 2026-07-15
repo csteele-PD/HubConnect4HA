@@ -201,14 +201,15 @@ class HubConnectDeviceSyncView(HubConnectView):
             return self._unauthorized()
 
         hass: HomeAssistant = request.app["hass"]
-        state = hass.states.get(device_id)
-        if state is None:
-            return self.json(
-                {"status": "error", "message": "device not found"},
-                status_code=404,
+        runtime_data = self._runtime_data(request)
+        return self.json(
+            build_sync_payload(
+                hass,
+                device_id,
+                device_class,
+                runtime_data.exported_entity_ids if runtime_data else [],
             )
-
-        return self.json(build_sync_payload(state, device_class))
+        )
 
 
 class HubConnectCommandView(HubConnectView):
@@ -230,12 +231,14 @@ class HubConnectCommandView(HubConnectView):
             return self._unauthorized()
 
         hass: HomeAssistant = request.app["hass"]
+        runtime_data = self._runtime_data(request)
         return self.json(
             await async_execute_command(
                 hass,
                 device_id,
                 device_command,
                 command_params,
+                runtime_data.exported_entity_ids if runtime_data else [],
             )
         )
 

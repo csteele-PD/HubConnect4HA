@@ -33,7 +33,12 @@ from .const import (
     PLATFORMS,
 )
 from .http import async_register_http_views
-from .protocol import build_attribute_payload, friendly_name, get_entity_mapping
+from .protocol import (
+    build_attribute_payload,
+    export_device_id_for_state,
+    friendly_name,
+    get_entity_mapping,
+)
 from .shadow import async_load_shadow_registry, get_shadow_registry
 
 
@@ -226,9 +231,15 @@ async def _async_send_hubitat_state_event(
         "data": None,
     }
     encoded_event = quote(json.dumps(payload, separators=(",", ":")), safe="")
-    encoded_entity_id = quote(new_state.entity_id, safe="")
+    export_device_id = export_device_id_for_state(
+        hass,
+        new_state,
+        getattr(runtime_data, "exported_entity_ids", None)
+        or tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, [])),
+    )
+    encoded_device_id = quote(export_device_id, safe="")
     url = (
-        f"{hubitat_uri.rstrip('/')}/device/{encoded_entity_id}/event/{encoded_event}"
+        f"{hubitat_uri.rstrip('/')}/device/{encoded_device_id}/event/{encoded_event}"
         f"?{urlencode({'access_token': hubitat_token})}"
     )
     session = async_get_clientsession(hass)
@@ -252,7 +263,7 @@ async def _async_send_hubitat_state_event(
         "/hubitat/event",
         "complete" if response.status == 200 else "error",
         (
-            f"{new_state.entity_id} {new_attribute['name']}="
+            f"{export_device_id} {new_attribute['name']}="
             f"{new_attribute['value']} status={response.status}"
         ),
     )

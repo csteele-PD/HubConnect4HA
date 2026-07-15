@@ -8,9 +8,12 @@ from typing import Any
 from urllib.parse import unquote
 
 from homeassistant.core import HomeAssistant, State
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 
 UNKNOWN_STATES = {"unknown", "unavailable"}
+EXPORT_DEVICE_PREFIX = "ha_device_"
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +23,16 @@ class EntityMapping:
     device_class: str
     attribute: str
     unit: str = ""
+
+
+@dataclass(slots=True)
+class ExportGroup:
+    """A group of HA entities that should become one HubConnect child device."""
+
+    id: str
+    label: str
+    device_class: str
+    states: list[tuple[State, EntityMapping]]
 
 
 # HubConnect deviceclass keys must match the Groovy NATIVE_DEVICES table. Prefer
@@ -119,25 +132,16 @@ def build_devices_payload(
     """Build a HubConnect /devices/get payload from current HA states."""
 
     grouped_devices: dict[str, list[dict[str, Any]]] = {}
-    selected_entity_ids = set(selected_entity_ids or [])
-
-    for state in hass.states.async_all():
-        if state.entity_id not in selected_entity_ids:
-            continue
-
-        if state.state in UNKNOWN_STATES:
-            continue
-
-        mapping = get_entity_mapping(state)
-        if mapping is None:
-            continue
-
-        grouped_devices.setdefault(mapping.device_class, []).append(
+    for group in build_export_groups(hass, selected_entity_ids):
+        grouped_devices.setdefault(group.device_class, []).append(
             {
-                "id": state.entity_id,
-                "label": friendly_name(state),
-                "attr": [build_attribute_payload(state, mapping)],
-                "commands": build_command_payload(state),
+                "id": group.id,
+                "label": group.label,
+                "attr": [
+                    build_attribute_payload(state, mapping)
+                    for state, mapping in group.states
+                ],
+                "commands": build_group_command_payload(group),
             }
         )
 
@@ -155,31 +159,26 @@ def build_export_requirements(
 
     requirements: dict[str, dict[str, Any]] = {}
 
-    for state in _selected_states(hass, selected_entity_ids):
-        if state.state in UNKNOWN_STATES:
-            continue
-
-        mapping = get_entity_mapping(state)
-        if mapping is None:
-            continue
-
+    for group in build_export_groups(hass, selected_entity_ids):
         requirement = requirements.setdefault(
-            mapping.device_class,
+            group.device_class,
             {
-                "deviceclass": mapping.device_class,
-                "driver": HUBCONNECT_EXPORT_DRIVERS[mapping.device_class],
+                "deviceclass": group.device_class,
+                "driver": HUBCONNECT_EXPORT_DRIVERS[group.device_class],
                 "attributes": set(),
                 "entities": [],
             },
         )
-        requirement["attributes"].add(mapping.attribute)
-        requirement["entities"].append(
-            {
-                "entity_id": state.entity_id,
-                "label": friendly_name(state),
-                "attribute": mapping.attribute,
-            }
-        )
+        for state, mapping in group.states:
+            requirement["attributes"].add(mapping.attribute)
+            requirement["entities"].append(
+                {
+                    "entity_id": state.entity_id,
+                    "export_id": group.id,
+                    "label": friendly_name(state),
+                    "attribute": mapping.attribute,
+                }
+            )
 
     return [
         {
@@ -241,21 +240,29 @@ def build_unsupported_exports(
     return sorted(unsupported, key=lambda entity: entity["entity_id"])
 
 
-def build_sync_payload(state: State, requested_device_class: str) -> dict[str, Any]:
+def build_sync_payload(
+    hass: HomeAssistant,
+    device_id: str,
+    requested_device_class: str,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> dict[str, Any]:
     """Build a HubConnect device sync payload."""
 
-    mapping = get_entity_mapping(state)
-    if mapping is None:
-        return {"status": "error", "message": "unsupported device"}
+    group = find_export_group(hass, device_id, selected_entity_ids)
+    if group is None:
+        return {"status": "error", "message": "device not found"}
 
-    if requested_device_class != mapping.device_class:
+    if requested_device_class != group.device_class:
         return {"status": "error", "message": "device class mismatch"}
 
     return {
         "status": "success",
-        "name": state.entity_id,
-        "label": friendly_name(state),
-        "currentValues": [build_attribute_payload(state, mapping)],
+        "name": group.id,
+        "label": group.label,
+        "currentValues": [
+            build_attribute_payload(state, mapping)
+            for state, mapping in group.states
+        ],
     }
 
 
@@ -304,15 +311,25 @@ def build_command_payload(state: State) -> dict[str, list[dict[str, Any]]]:
     return {}
 
 
+def build_group_command_payload(group: ExportGroup) -> dict[str, list[dict[str, Any]]]:
+    """Return the HubConnect command map for a grouped export."""
+
+    commands: dict[str, list[dict[str, Any]]] = {}
+    for state, _mapping in group.states:
+        commands.update(build_command_payload(state))
+    return commands
+
+
 async def async_execute_command(
     hass: HomeAssistant,
-    entity_id: str,
+    device_id: str,
     command: str,
     encoded_params: str,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
 ) -> dict[str, str]:
     """Execute a HubConnect command against a Home Assistant entity."""
 
-    state = hass.states.get(entity_id)
+    state = _command_target_state(hass, device_id, selected_entity_ids)
     if state is None:
         return {"status": "error", "message": "device not found"}
 
@@ -323,13 +340,13 @@ async def async_execute_command(
     if mapping is None:
         return {"status": "error", "message": "unsupported device"}
 
-    domain = entity_id.split(".", 1)[0]
+    domain = state.entity_id.split(".", 1)[0]
 
     if command in {"on", "off"} and domain in {"switch", "light"}:
         await hass.services.async_call(
             "homeassistant",
             f"turn_{command}",
-            {"entity_id": entity_id},
+            {"entity_id": state.entity_id},
             blocking=True,
         )
         return {"status": "success"}
@@ -344,7 +361,7 @@ async def async_execute_command(
         await hass.services.async_call(
             "light",
             "turn_on",
-            {"entity_id": entity_id, "brightness": brightness},
+            {"entity_id": state.entity_id, "brightness": brightness},
             blocking=True,
         )
         return {"status": "success"}
@@ -364,6 +381,182 @@ def _decode_command_params(encoded_params: str) -> list[Any]:
         return params
 
     return []
+
+
+def build_export_groups(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[ExportGroup]:
+    """Build grouped HA exports that should map to Hubitat child devices."""
+
+    groups: dict[str, ExportGroup] = {}
+
+    for state in _selected_states(hass, selected_entity_ids):
+        if state.state in UNKNOWN_STATES:
+            continue
+
+        mapping = get_entity_mapping(state)
+        if mapping is None:
+            continue
+
+        export_base_id = _export_device_base_id_for_state(hass, state)
+        potential_attributes = _potential_attributes_for_state_device(hass, state)
+        device_class = _best_device_class_for_attributes(potential_attributes)
+        export_id = export_base_id
+        if device_class is None:
+            device_class = mapping.device_class
+            export_id = f"{export_base_id}_{device_class}"
+        if mapping.attribute not in HUBCONNECT_EXPORT_ATTRIBUTES.get(
+            device_class,
+            set(),
+        ):
+            continue
+
+        group = groups.setdefault(
+            export_id,
+            ExportGroup(
+                id=export_id,
+                label=export_device_label(hass, state),
+                device_class=device_class,
+                states=[],
+            ),
+        )
+        group.states.append((state, mapping))
+
+    for group in groups.values():
+        group.states.sort(key=lambda item: item[1].attribute)
+
+    return sorted(groups.values(), key=lambda group: group.id)
+
+
+def find_export_group(
+    hass: HomeAssistant,
+    device_id: str,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> ExportGroup | None:
+    """Find an exported HA device group by HubConnect device id."""
+
+    for group in build_export_groups(hass, selected_entity_ids):
+        if group.id == device_id:
+            return group
+    return None
+
+
+def export_device_id_for_state(
+    hass: HomeAssistant,
+    state: State,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> str:
+    """Return the HubConnect device id for an exported HA state."""
+
+    for group in build_export_groups(hass, selected_entity_ids):
+        if any(
+            group_state.entity_id == state.entity_id
+            for group_state, _mapping in group.states
+        ):
+            return group.id
+    return _export_device_base_id_for_state(hass, state)
+
+
+def _export_device_base_id_for_state(hass: HomeAssistant, state: State) -> str:
+    """Return the base HubConnect device id for an exported HA state."""
+
+    device_id = _ha_device_id_for_state(hass, state)
+    if device_id:
+        return f"{EXPORT_DEVICE_PREFIX}{device_id}"
+    return state.entity_id
+
+
+def export_device_label(hass: HomeAssistant, state: State) -> str:
+    """Return the HubConnect device label for an exported HA state."""
+
+    device_id = _ha_device_id_for_state(hass, state)
+    if not device_id:
+        return friendly_name(state)
+
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        return friendly_name(state)
+
+    return (
+        device.name_by_user
+        or device.name
+        or device.model
+        or device.manufacturer
+        or friendly_name(state)
+    )
+
+
+def _best_device_class_for_attributes(attributes: set[str]) -> str | None:
+    """Choose the most specific HubConnect class for a set of attributes."""
+
+    candidates = [
+        device_class
+        for device_class, supported_attributes in HUBCONNECT_EXPORT_ATTRIBUTES.items()
+        if attributes <= supported_attributes
+    ]
+    if not candidates:
+        return None
+
+    return sorted(
+        candidates,
+        key=lambda device_class: (
+            len(HUBCONNECT_EXPORT_ATTRIBUTES[device_class] - attributes),
+            device_class.startswith("v_"),
+            device_class,
+        ),
+    )[0]
+
+
+def _potential_attributes_for_state_device(
+    hass: HomeAssistant,
+    state: State,
+) -> set[str]:
+    """Return all exportable HubConnect attrs on the same HA device."""
+
+    device_id = _ha_device_id_for_state(hass, state)
+    if not device_id:
+        mapping = get_entity_mapping(state)
+        return {mapping.attribute} if mapping else set()
+
+    attributes: set[str] = set()
+    registry = er.async_get(hass)
+    for entry in er.async_entries_for_device(registry, device_id):
+        possible_state = hass.states.get(entry.entity_id)
+        if possible_state is None:
+            continue
+        mapping = get_entity_mapping(possible_state)
+        if mapping is not None:
+            attributes.add(mapping.attribute)
+    return attributes
+
+
+def _ha_device_id_for_state(hass: HomeAssistant, state: State) -> str | None:
+    """Return the HA device registry id for a state, if one exists."""
+
+    entry = er.async_get(hass).async_get(state.entity_id)
+    return entry.device_id if entry else None
+
+
+def _command_target_state(
+    hass: HomeAssistant,
+    device_id: str,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> State | None:
+    """Return the selected HA entity that can execute a HubConnect command."""
+
+    direct_state = hass.states.get(device_id)
+    if direct_state is not None:
+        return direct_state
+
+    group = find_export_group(hass, device_id, selected_entity_ids)
+    if group is None:
+        return None
+
+    for state, _mapping in group.states:
+        if state.entity_id.split(".", 1)[0] in {"switch", "light"}:
+            return state
+    return group.states[0][0] if group.states else None
 
 
 def friendly_name(state: State) -> str:
