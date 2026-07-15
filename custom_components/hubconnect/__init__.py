@@ -17,9 +17,9 @@ from urllib.parse import quote, urlencode
 from aiohttp import ClientError
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, State
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_EXPORTED_ENTITY_IDS,
@@ -40,6 +40,8 @@ from .protocol import (
     get_entity_mapping,
 )
 from .shadow import async_load_shadow_registry, get_shadow_registry
+
+EXPORT_LISTENER_MARKER = "state-helper-v1"
 
 
 @dataclass(slots=True)
@@ -82,8 +84,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _async_ping_hubitat_forever(hass, entry)
     )
     if runtime_data.exported_entity_ids:
-        runtime_data.export_state_unsub = hass.bus.async_listen(
-            EVENT_STATE_CHANGED,
+        runtime_data.export_state_unsub = async_track_state_change_event(
+            hass,
+            runtime_data.exported_entity_ids,
             lambda event: hass.async_create_task(
                 _async_send_hubitat_state_event(hass, entry, event)
             ),
@@ -92,7 +95,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "ha_export",
             "listen",
             len(runtime_data.exported_entity_ids),
-            ",".join(runtime_data.exported_entity_ids),
+            f"{EXPORT_LISTENER_MARKER}:"
+            + ",".join(runtime_data.exported_entity_ids),
         )
     return True
 
