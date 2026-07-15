@@ -240,6 +240,22 @@ def build_unsupported_exports(
     return sorted(unsupported, key=lambda entity: entity["entity_id"])
 
 
+def build_cleanup_device_ids(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[str]:
+    """Return exported HubConnect ids that should be preserved on cleanup."""
+
+    cleanup_ids: set[str] = set()
+    selected_ids = set(selected_entity_ids or [])
+    for state in _selected_states(hass, selected_ids):
+        if get_entity_mapping(state) is None:
+            continue
+        cleanup_ids.add(export_device_id_for_state(hass, state, selected_ids))
+
+    return sorted(cleanup_ids)
+
+
 def build_sync_payload(
     hass: HomeAssistant,
     device_id: str,

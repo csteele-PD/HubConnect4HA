@@ -29,7 +29,7 @@ from .pairing import (
     async_post_to_hubitat,
     decode_connection_key,
 )
-from .protocol import build_devices_payload
+from .protocol import build_cleanup_device_ids, build_devices_payload
 from .shadow import get_shadow_registry
 
 
@@ -180,11 +180,7 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
 
         selected_entity_ids = options.get(CONF_EXPORTED_ENTITY_IDS, [])
         payloads = build_devices_payload(self.hass, selected_entity_ids)
-        cleanup_ids = [
-            device["id"]
-            for payload in payloads
-            for device in payload["devices"]
-        ]
+        cleanup_ids = build_cleanup_device_ids(self.hass, selected_entity_ids)
         registry = get_shadow_registry(self.hass)
 
         for payload in payloads:
