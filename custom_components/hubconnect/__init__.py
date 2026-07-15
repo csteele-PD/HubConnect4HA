@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from urllib.parse import quote, urlencode
 
@@ -42,6 +42,8 @@ from .protocol import (
 from .shadow import async_load_shadow_registry, get_shadow_registry
 
 EXPORT_LISTENER_MARKER = "state-helper-v1"
+EXPORT_POLL_INTERVAL = 5
+ExportAttributeSignature = tuple[str, str, object, str]
 
 
 @dataclass(slots=True)
@@ -57,7 +59,11 @@ class HubConnectRuntimeData:
     hubitat_connection_type: str | None
     exported_entity_ids: tuple[str, ...]
     ping_task: asyncio.Task[None] | None = None
+    export_poll_task: asyncio.Task[None] | None = None
     export_state_unsub: Callable[[], None] | None = None
+    export_last_attributes: dict[str, ExportAttributeSignature] = field(
+        default_factory=dict
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -98,6 +104,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"{EXPORT_LISTENER_MARKER}:"
             + ",".join(runtime_data.exported_entity_ids),
         )
+        runtime_data.export_poll_task = hass.async_create_task(
+            _async_poll_hubitat_export_states_forever(hass, entry)
+        )
+        get_shadow_registry(hass).log_platform_event(
+            "ha_export",
+            "poll",
+            len(runtime_data.exported_entity_ids),
+            f"interval={EXPORT_POLL_INTERVAL}s",
+        )
     return True
 
 
@@ -113,6 +128,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         runtime_data.ping_task.cancel()
         with suppress(asyncio.CancelledError):
             await runtime_data.ping_task
+
+    if runtime_data and runtime_data.export_poll_task:
+        runtime_data.export_poll_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await runtime_data.export_poll_task
 
     if runtime_data and runtime_data.export_state_unsub:
         runtime_data.export_state_unsub()
@@ -183,6 +203,55 @@ async def _async_ping_hubitat(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
 
 
+async def _async_poll_hubitat_export_states_forever(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Poll selected HA exports as a fallback for state-change callbacks."""
+
+    while True:
+        await _async_poll_hubitat_export_states(hass, entry)
+        await asyncio.sleep(EXPORT_POLL_INTERVAL)
+
+
+async def _async_poll_hubitat_export_states(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+) -> None:
+    """Push changed selected HA states to Hubitat from the state machine."""
+
+    runtime_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime_data is None:
+        return
+    selected_entity_ids = (
+        getattr(runtime_data, "exported_entity_ids", None)
+        or tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, []))
+    )
+    for entity_id in selected_entity_ids:
+        state = hass.states.get(entity_id)
+        if not isinstance(state, State):
+            continue
+
+        signature = _export_attribute_signature(state)
+        if signature is None:
+            continue
+
+        old_signature = runtime_data.export_last_attributes.get(entity_id)
+        if old_signature is None:
+            runtime_data.export_last_attributes[entity_id] = signature
+            continue
+        if old_signature == signature:
+            continue
+
+        await _async_send_hubitat_state_change(
+            hass,
+            entry,
+            state,
+            None,
+            source="poll",
+        )
+
+
 async def _async_send_hubitat_state_event(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -192,10 +261,31 @@ async def _async_send_hubitat_state_event(
 
     new_state = event.data.get("new_state")
     old_state = event.data.get("old_state")
+    await _async_send_hubitat_state_change(
+        hass,
+        entry,
+        new_state,
+        old_state,
+        source="event",
+    )
+
+
+async def _async_send_hubitat_state_change(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    new_state: object,
+    old_state: object,
+    *,
+    source: str,
+) -> None:
+    """Push a selected Home Assistant state change to Hubitat."""
+
     if not isinstance(new_state, State):
         return
 
     runtime_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if runtime_data is None:
+        return
     selected_entity_ids = (
         getattr(runtime_data, "exported_entity_ids", None)
         or tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, []))
@@ -208,7 +298,7 @@ async def _async_send_hubitat_state_event(
         "/hubitat/event",
         "seen",
         (
-            f"{new_state.entity_id} "
+            f"{source} {new_state.entity_id} "
             f"{old_state.state if isinstance(old_state, State) else None}"
             f"->{new_state.state}"
         ),
@@ -225,6 +315,12 @@ async def _async_send_hubitat_state_event(
         return
 
     new_attribute = build_attribute_payload(new_state, mapping)
+    runtime_data.export_last_attributes[new_state.entity_id] = (
+        mapping.device_class,
+        new_attribute["name"],
+        new_attribute["value"],
+        new_attribute["unit"],
+    )
     if isinstance(old_state, State):
         old_mapping = get_entity_mapping(old_state)
         if (
@@ -298,4 +394,19 @@ async def _async_send_hubitat_state_event(
             f"{export_device_id} {new_attribute['name']}="
             f"{new_attribute['value']} status={response.status}"
         ),
+    )
+
+
+def _export_attribute_signature(state: State) -> ExportAttributeSignature | None:
+    """Return the HubConnect attribute signature for a HA export state."""
+
+    mapping = get_entity_mapping(state)
+    if mapping is None:
+        return None
+    attribute = build_attribute_payload(state, mapping)
+    return (
+        mapping.device_class,
+        attribute["name"],
+        attribute["value"],
+        attribute["unit"],
     )
