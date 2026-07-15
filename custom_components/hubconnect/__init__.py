@@ -17,9 +17,9 @@ from urllib.parse import quote, urlencode
 from aiohttp import ClientError
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_STATE_CHANGED
 from homeassistant.core import Event, HomeAssistant, State
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_EXPORTED_ENTITY_IDS,
@@ -82,12 +82,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _async_ping_hubitat_forever(hass, entry)
     )
     if runtime_data.exported_entity_ids:
-        runtime_data.export_state_unsub = async_track_state_change_event(
-            hass,
-            runtime_data.exported_entity_ids,
+        runtime_data.export_state_unsub = hass.bus.async_listen(
+            EVENT_STATE_CHANGED,
             lambda event: hass.async_create_task(
                 _async_send_hubitat_state_event(hass, entry, event)
             ),
+        )
+        get_shadow_registry(hass).log_platform_event(
+            "ha_export",
+            "listen",
+            len(runtime_data.exported_entity_ids),
+            ",".join(runtime_data.exported_entity_ids),
         )
     return True
 
@@ -187,14 +192,21 @@ async def _async_send_hubitat_state_event(
         return
 
     runtime_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if new_state.entity_id not in (
+    selected_entity_ids = (
         getattr(runtime_data, "exported_entity_ids", None)
         or tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, []))
-    ):
+    )
+    if new_state.entity_id not in selected_entity_ids:
         return
 
     mapping = get_entity_mapping(new_state)
     if mapping is None:
+        get_shadow_registry(hass).log_request(
+            "GET",
+            "/hubitat/event",
+            "skipped",
+            f"{new_state.entity_id} unsupported",
+        )
         return
 
     new_attribute = build_attribute_payload(new_state, mapping)
@@ -234,8 +246,7 @@ async def _async_send_hubitat_state_event(
     export_device_id = export_device_id_for_state(
         hass,
         new_state,
-        getattr(runtime_data, "exported_entity_ids", None)
-        or tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, [])),
+        selected_entity_ids,
     )
     encoded_device_id = quote(export_device_id, safe="")
     url = (
