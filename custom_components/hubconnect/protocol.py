@@ -30,13 +30,12 @@ HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
     "dimmer": {"switch", "level"},
     "energy": {"energy"},
     "moisture": {"water", "temperature", "battery"},
-    "motion": {"motion", "temperature", "battery"},
+    "motion": {"motion", "temperature", "illuminance", "battery"},
     "power": {"power"},
     "presence": {"presence", "battery"},
     "smoke": {"smoke", "carbonMonoxide", "battery"},
     "switch": {"switch"},
     "v_humidity": {"humidity"},
-    "v_illuminance": {"illuminance"},
     "v_temperature": {"temperature"},
 }
 
@@ -51,14 +50,13 @@ HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
     "smoke": "HubConnect SmokeCO",
     "switch": "HubConnect Switch",
     "v_humidity": "HubConnect Virtual Virtual Humidity Sensor",
-    "v_illuminance": "HubConnect Virtual Illuminance Sensor",
     "v_temperature": "HubConnect Virtual Temperature Sensor",
 }
 
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
     "energy": EntityMapping("energy", "energy"),
     "humidity": EntityMapping("v_humidity", "humidity", "%"),
-    "illuminance": EntityMapping("v_illuminance", "illuminance"),
+    "illuminance": EntityMapping("motion", "illuminance"),
     "power": EntityMapping("power", "power", "W"),
     "temperature": EntityMapping("v_temperature", "temperature"),
 }
