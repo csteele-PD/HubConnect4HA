@@ -35,6 +35,15 @@ class ExportGroup:
     states: list[tuple[State, EntityMapping]]
 
 
+@dataclass(frozen=True, slots=True)
+class ExportPlan:
+    """Planned HubConnect class/id for one HA device export."""
+
+    base_id: str
+    device_class: str
+    export_id: str
+
+
 # HubConnect deviceclass keys must match the Groovy NATIVE_DEVICES table. Prefer
 # standard mirror drivers when they exist; use v_* only for standalone synthetic
 # measurements where HubConnect has no plain native class.
@@ -418,6 +427,7 @@ def build_export_groups(
     """Build grouped HA exports that should map to Hubitat child devices."""
 
     groups: dict[str, ExportGroup] = {}
+    export_plans = _export_plans_for_selected_devices(hass, selected_entity_ids)
 
     for state in _selected_states(hass, selected_entity_ids):
         if state.state in UNKNOWN_STATES:
@@ -428,12 +438,13 @@ def build_export_groups(
             continue
 
         export_base_id = _export_device_base_id_for_state(hass, state)
-        potential_attributes = _potential_attributes_for_state_device(hass, state)
-        device_class = _best_device_class_for_attributes(potential_attributes)
-        export_id = export_base_id
-        if device_class is None:
+        plan = export_plans.get(export_base_id)
+        if plan is None:
             device_class = mapping.device_class
             export_id = f"{export_base_id}_{device_class}"
+        else:
+            device_class = plan.device_class
+            export_id = plan.export_id
         if mapping.attribute not in HUBCONNECT_EXPORT_ATTRIBUTES.get(
             device_class,
             set(),
@@ -455,6 +466,48 @@ def build_export_groups(
         group.states.sort(key=lambda item: item[1].attribute)
 
     return sorted(groups.values(), key=lambda group: group.id)
+
+
+def _export_plans_for_selected_devices(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> dict[str, ExportPlan]:
+    """Build stable HubConnect class/id plans from selected HA device siblings."""
+
+    selected_ids = {str(entity_id) for entity_id in selected_entity_ids or []}
+    states_by_base_id: dict[str, list[State]] = {}
+    for entity_id in selected_ids:
+        state = hass.states.get(entity_id)
+        if state is None:
+            continue
+        mapping = get_entity_mapping(state)
+        if mapping is None:
+            continue
+        base_id = _export_device_base_id_for_state(hass, state)
+        states_by_base_id.setdefault(base_id, []).append(state)
+
+    plans: dict[str, ExportPlan] = {}
+    for base_id, states in states_by_base_id.items():
+        attributes = {
+            mapping.attribute
+            for state in states
+            if (mapping := get_entity_mapping(state)) is not None
+        }
+        device_class = _best_device_class_for_attributes(attributes)
+        if device_class is None:
+            continue
+
+        export_id = base_id
+        if len(attributes) == 1 and device_class.startswith("v_"):
+            export_id = f"{base_id}_{device_class}"
+
+        plans[base_id] = ExportPlan(
+            base_id=base_id,
+            device_class=device_class,
+            export_id=export_id,
+        )
+
+    return plans
 
 
 def find_export_group(
