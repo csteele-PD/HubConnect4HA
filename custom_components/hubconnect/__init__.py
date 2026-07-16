@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from functools import partial
 import json
 from urllib.parse import quote, urlencode
 
@@ -19,7 +20,10 @@ from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, State
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_state_report_event,
+)
 
 from .const import (
     CONF_EXPORTED_ENTITY_IDS,
@@ -61,6 +65,7 @@ class HubConnectRuntimeData:
     ping_task: asyncio.Task[None] | None = None
     export_poll_task: asyncio.Task[None] | None = None
     export_state_unsub: Callable[[], None] | None = None
+    export_state_report_unsub: Callable[[], None] | None = None
     export_last_attributes: dict[str, ExportAttributeSignature] = field(
         default_factory=dict
     )
@@ -93,15 +98,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         runtime_data.export_state_unsub = async_track_state_change_event(
             hass,
             runtime_data.exported_entity_ids,
-            lambda event: hass.async_create_task(
-                _async_send_hubitat_state_event(hass, entry, event)
-            ),
+            partial(_async_send_hubitat_state_event, hass, entry, "changed"),
+        )
+        runtime_data.export_state_report_unsub = async_track_state_report_event(
+            hass,
+            runtime_data.exported_entity_ids,
+            partial(_async_send_hubitat_state_event, hass, entry, "reported"),
         )
         get_shadow_registry(hass).log_platform_event(
             "ha_export",
             "listen",
             len(runtime_data.exported_entity_ids),
-            f"{EXPORT_LISTENER_MARKER}:"
+            f"{EXPORT_LISTENER_MARKER}:changed+reported:"
             + ",".join(runtime_data.exported_entity_ids),
         )
         runtime_data.export_poll_task = hass.async_create_task(
@@ -136,6 +144,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if runtime_data and runtime_data.export_state_unsub:
         runtime_data.export_state_unsub()
+
+    if runtime_data and runtime_data.export_state_report_unsub:
+        runtime_data.export_state_report_unsub()
 
     hass.data[DOMAIN].pop(entry.entry_id, None)
     return True
@@ -255,6 +266,7 @@ async def _async_poll_hubitat_export_states(
 async def _async_send_hubitat_state_event(
     hass: HomeAssistant,
     entry: ConfigEntry,
+    event_source: str,
     event: Event,
 ) -> None:
     """Push a selected Home Assistant state change to Hubitat."""
@@ -266,7 +278,7 @@ async def _async_send_hubitat_state_event(
         entry,
         new_state,
         old_state,
-        source="event",
+        source=event_source,
     )
 
 
