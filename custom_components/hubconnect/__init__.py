@@ -35,6 +35,7 @@ from .const import (
 )
 from .http import async_register_http_views
 from .protocol import (
+    UNKNOWN_STATES,
     build_attribute_payload,
     export_device_id_for_state,
     friendly_name,
@@ -217,6 +218,15 @@ async def _async_send_hubitat_state_change(
         or tuple(entry.options.get(CONF_EXPORTED_ENTITY_IDS, []))
     )
     if new_state.entity_id not in selected_entity_ids:
+        return
+
+    if new_state.state in UNKNOWN_STATES:
+        get_shadow_registry(hass).log_request(
+            "GET",
+            "/hubitat/event",
+            "skipped",
+            f"{new_state.entity_id} state is {new_state.state}",
+        )
         return
 
     get_shadow_registry(hass).log_request(
