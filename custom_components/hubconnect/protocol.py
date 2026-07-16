@@ -43,12 +43,22 @@ HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
     "dimmer": {"switch", "level"},
     "energy": {"energy"},
     "moisture": {"water", "temperature", "battery"},
-    "motion": {"motion", "temperature", "illuminance", "battery"},
+    "motion": {"motion", "temperature", "battery"},
+    "omnipurpose": {
+        "motion",
+        "temperature",
+        "humidity",
+        "illuminance",
+        "ultravioletIndex",
+        "tamper",
+        "battery",
+    },
     "power": {"power"},
     "presence": {"presence", "battery"},
     "smoke": {"smoke", "carbonMonoxide", "battery"},
     "switch": {"switch"},
     "v_humidity": {"humidity"},
+    "v_illuminance": {"illuminance"},
     "v_temperature": {"temperature"},
 }
 
@@ -58,18 +68,20 @@ HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
     "energy": "HubConnect Energy Meter",
     "moisture": "HubConnect Moisture Sensor",
     "motion": "HubConnect Motion Sensor",
+    "omnipurpose": "HubConnect Omnipurpose Sensor",
     "power": "HubConnect Power Meter",
     "presence": "HubConnect Presence Sensor",
     "smoke": "HubConnect SmokeCO",
     "switch": "HubConnect Switch",
     "v_humidity": "HubConnect Virtual Virtual Humidity Sensor",
+    "v_illuminance": "HubConnect Virtual Illuminance Sensor",
     "v_temperature": "HubConnect Virtual Temperature Sensor",
 }
 
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
     "energy": EntityMapping("energy", "energy"),
     "humidity": EntityMapping("v_humidity", "humidity", "%"),
-    "illuminance": EntityMapping("motion", "illuminance"),
+    "illuminance": EntityMapping("v_illuminance", "illuminance"),
     "power": EntityMapping("power", "power", "W"),
     "temperature": EntityMapping("v_temperature", "temperature"),
 }
@@ -472,6 +484,22 @@ def export_device_id_for_state(
         ):
             return group.id
     return _export_device_base_id_for_state(hass, state)
+
+
+def export_device_label_for_state(
+    hass: HomeAssistant,
+    state: State,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> str:
+    """Return the HubConnect device label for an exported HA state."""
+
+    for group in build_export_groups(hass, selected_entity_ids):
+        if any(
+            group_state.entity_id == state.entity_id
+            for group_state, _mapping in group.states
+        ):
+            return group.label
+    return export_device_label(hass, state)
 
 
 def _export_device_base_id_for_state(hass: HomeAssistant, state: State) -> str:

@@ -33,6 +33,7 @@ Current HA-to-Hubitat export mapping:
 | dimming `light` | `dimmer` | `HubConnect Dimmer` |
 | `binary_sensor` contact/opening/window/door | `contact` | `HubConnect Contact Sensor` |
 | `binary_sensor` motion/occupancy | `motion` | `HubConnect Motion Sensor` |
+| HA device with motion/occupancy plus illuminance or other omnibus sensor attrs | `omnipurpose` | `HubConnect Omnipurpose Sensor` |
 | `binary_sensor` moisture | `moisture` | `HubConnect Moisture Sensor` |
 | `binary_sensor` presence | `presence` | `HubConnect Presence Sensor` |
 | `binary_sensor` smoke/gas | `smoke` | `HubConnect SmokeCO` |

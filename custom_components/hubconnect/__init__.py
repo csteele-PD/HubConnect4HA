@@ -38,7 +38,7 @@ from .protocol import (
     UNKNOWN_STATES,
     build_attribute_payload,
     export_device_id_for_state,
-    friendly_name,
+    export_device_label_for_state,
     get_entity_mapping,
 )
 from .shadow import async_load_shadow_registry, get_shadow_registry
@@ -286,7 +286,11 @@ async def _async_send_hubitat_state_change(
         "name": new_attribute["name"],
         "value": new_attribute["value"],
         "unit": new_attribute["unit"] or None,
-        "displayName": friendly_name(new_state),
+        "displayName": export_device_label_for_state(
+            hass,
+            new_state,
+            selected_entity_ids,
+        ),
         "data": None,
     }
     encoded_event = quote(json.dumps(payload, separators=(",", ":")), safe="")
