@@ -19,6 +19,7 @@ from aiohttp import ClientError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, State
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -79,6 +80,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = runtime_data
 
     await async_load_shadow_registry(hass)
+    _async_remove_orphan_shadow_devices(hass)
     async_register_http_views(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -98,6 +100,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"{EXPORT_LISTENER_MARKER}:" + ",".join(runtime_data.exported_entity_ids),
         )
     return True
+
+
+def _async_remove_orphan_shadow_devices(hass: HomeAssistant) -> None:
+    """Remove HubConnect device-registry entries no longer backed by shadows."""
+
+    registry = get_shadow_registry(hass)
+    shadow_device_ids = {
+        entity.device_id for entity in registry.entities.values()
+    }
+    device_registry = dr.async_get(hass)
+
+    for device_entry in list(device_registry.devices.values()):
+        device_shadow_ids = {
+            str(identifier[1])
+            for identifier in device_entry.identifiers
+            if len(identifier) == 2 and identifier[0] == DOMAIN
+        }
+        if device_shadow_ids and not device_shadow_ids & shadow_device_ids:
+            device_registry.async_remove_device(device_entry.id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
