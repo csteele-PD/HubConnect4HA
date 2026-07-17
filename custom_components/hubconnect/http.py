@@ -10,6 +10,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_UNIT_OF_MEASUREMENT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
@@ -393,7 +394,14 @@ class HubConnectDevicesSaveView(HubConnectView):
                 _orphaned_unique_ids_for_cleanup(hass, cleanup_device_ids)
             )
             _async_remove_shadow_entities(hass, removed_unique_ids)
-            detail = f"cleanup:{len(cleanup_device_ids)} removed:{len(set(removed_unique_ids))}"
+            removed_device_ids = _async_remove_orphan_shadow_devices(
+                hass, cleanup_device_ids
+            )
+            detail = (
+                f"cleanup:{len(cleanup_device_ids)} "
+                f"removed:{len(set(removed_unique_ids))} "
+                f"devices:{len(removed_device_ids)}"
+            )
         elif data.get("deviceclass") and data.get("devices"):
             registry.upsert_devices(str(data["deviceclass"]), data["devices"])
             detail = f"{data['deviceclass']}:{len(data['devices'])}"
@@ -555,6 +563,31 @@ def _async_remove_shadow_entities(
             entity_registry.async_remove(entity_id)
 
 
+def _async_remove_orphan_shadow_devices(
+    hass: HomeAssistant,
+    keep_device_ids: list[object],
+) -> list[str]:
+    """Remove HA device-registry entries for discarded shadow devices."""
+
+    keep_ids = {str(device_id) for device_id in keep_device_ids}
+    device_registry = dr.async_get(hass)
+    removed_device_ids: list[str] = []
+
+    for device_entry in list(device_registry.devices.values()):
+        shadow_device_ids = {
+            str(identifier[1])
+            for identifier in device_entry.identifiers
+            if len(identifier) == 2 and identifier[0] == DOMAIN
+        }
+        if not shadow_device_ids or shadow_device_ids & keep_ids:
+            continue
+
+        device_registry.async_remove_device(device_entry.id)
+        removed_device_ids.extend(sorted(shadow_device_ids))
+
+    return removed_device_ids
+
+
 def _async_write_shadow_state(hass: HomeAssistant, unique_id: str) -> None:
     """Write a shadow entity directly into Home Assistant's state machine."""
 
@@ -607,6 +640,7 @@ class HubConnectShadowDebugView(HubConnectView):
         runtime_data = self._runtime_data(request)
         registry = get_shadow_registry(hass)
         entity_registry = er.async_get(hass)
+        device_registry = dr.async_get(hass)
         hubconnect_entries = {
             entry.unique_id: entry
             for entry in entity_registry.entities.values()
@@ -630,6 +664,27 @@ class HubConnectShadowDebugView(HubConnectView):
             for unique_id in live_entities
             if unique_id not in shadow_unique_ids and unique_id not in shadow_device_ids
         )
+        hubconnect_devices = []
+        orphaned_devices = []
+        for device_entry in device_registry.devices.values():
+            device_shadow_ids = sorted(
+                str(identifier[1])
+                for identifier in device_entry.identifiers
+                if len(identifier) == 2 and identifier[0] == DOMAIN
+            )
+            if not device_shadow_ids:
+                continue
+
+            device_data = {
+                "id": device_entry.id,
+                "name": getattr(device_entry, "name_by_user", None)
+                or getattr(device_entry, "name", None),
+                "identifiers": device_shadow_ids,
+            }
+            hubconnect_devices.append(device_data)
+            if not set(device_shadow_ids) & shadow_device_ids:
+                orphaned_devices.append(device_data)
+
         return self.json(
             {
                 "status": "success",
@@ -678,6 +733,8 @@ class HubConnectShadowDebugView(HubConnectView):
                 ],
                 "live_entities": sorted(live_entities),
                 "orphaned_live_entities": orphaned_live_entities,
+                "device_registry": hubconnect_devices,
+                "orphaned_device_registry": orphaned_devices,
                 "shadow_states": [
                     {
                         "unique_id": unique_id,
