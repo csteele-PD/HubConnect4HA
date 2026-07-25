@@ -40,7 +40,7 @@ from .protocol import (
     build_attribute_payload,
     export_device_id_for_state,
     export_device_label_for_state,
-    get_entity_mapping,
+    get_entity_mappings,
 )
 from .shadow import async_load_shadow_registry, get_shadow_registry
 
@@ -261,8 +261,8 @@ async def _async_send_hubitat_state_change(
         ),
     )
 
-    mapping = get_entity_mapping(new_state)
-    if mapping is None:
+    mappings = get_entity_mappings(new_state)
+    if not mappings:
         get_shadow_registry(hass).log_request(
             "GET",
             "/hubitat/event",
@@ -270,21 +270,6 @@ async def _async_send_hubitat_state_change(
             f"{new_state.entity_id} unsupported",
         )
         return
-
-    new_attribute = build_attribute_payload(new_state, mapping)
-    if isinstance(old_state, State):
-        old_mapping = get_entity_mapping(old_state)
-        if (
-            old_mapping == mapping
-            and build_attribute_payload(old_state, mapping) == new_attribute
-        ):
-            get_shadow_registry(hass).log_request(
-                "GET",
-                "/hubitat/event",
-                "skipped",
-                f"{new_state.entity_id} unchanged {new_attribute['name']}",
-            )
-            return
 
     hubitat_uri = (
         getattr(runtime_data, "hubitat_uri", None)
@@ -303,50 +288,68 @@ async def _async_send_hubitat_state_change(
         )
         return
 
-    payload = {
-        "name": new_attribute["name"],
-        "value": new_attribute["value"],
-        "unit": new_attribute["unit"] or None,
-        "displayName": export_device_label_for_state(
-            hass,
-            new_state,
-            selected_entity_ids,
-        ),
-        "data": None,
-    }
-    encoded_event = quote(json.dumps(payload, separators=(",", ":")), safe="")
     export_device_id = export_device_id_for_state(
         hass,
         new_state,
         selected_entity_ids,
     )
     encoded_device_id = quote(export_device_id, safe="")
-    url = (
-        f"{hubitat_uri.rstrip('/')}/device/{encoded_device_id}/event/{encoded_event}"
-        f"?{urlencode({'access_token': hubitat_token})}"
-    )
     session = async_get_clientsession(hass)
-    try:
-        response = await session.get(
-            url,
-            headers={"Authorization": f"Bearer {hubitat_token}"},
-            timeout=10,
+    old_attributes = {}
+    if isinstance(old_state, State):
+        old_attributes = {
+            mapping.attribute: build_attribute_payload(old_state, mapping)
+            for mapping in get_entity_mappings(old_state)
+        }
+
+    for mapping in mappings:
+        new_attribute = build_attribute_payload(new_state, mapping)
+        if old_attributes.get(mapping.attribute) == new_attribute:
+            get_shadow_registry(hass).log_request(
+                "GET",
+                "/hubitat/event",
+                "skipped",
+                f"{new_state.entity_id} unchanged {new_attribute['name']}",
+            )
+            continue
+
+        payload = {
+            "name": new_attribute["name"],
+            "value": new_attribute["value"],
+            "unit": new_attribute["unit"] or None,
+            "displayName": export_device_label_for_state(
+                hass,
+                new_state,
+                selected_entity_ids,
+            ),
+            "data": None,
+        }
+        encoded_event = quote(json.dumps(payload, separators=(",", ":")), safe="")
+        url = (
+            f"{hubitat_uri.rstrip('/')}/device/{encoded_device_id}/event/{encoded_event}"
+            f"?{urlencode({'access_token': hubitat_token})}"
         )
-    except (ClientError, TimeoutError):
+        try:
+            response = await session.get(
+                url,
+                headers={"Authorization": f"Bearer {hubitat_token}"},
+                timeout=10,
+            )
+        except (ClientError, TimeoutError):
+            get_shadow_registry(hass).log_request(
+                "GET",
+                "/hubitat/event",
+                "error",
+                new_state.entity_id,
+            )
+            continue
+
         get_shadow_registry(hass).log_request(
             "GET",
             "/hubitat/event",
-            "error",
-            new_state.entity_id,
+            "complete" if response.status == 200 else "error",
+            (
+                f"{export_device_id} {new_attribute['name']}="
+                f"{new_attribute['value']} status={response.status}"
+            ),
         )
-        return
-
-    get_shadow_registry(hass).log_request(
-        "GET",
-        "/hubitat/event",
-        "complete" if response.status == 200 else "error",
-        (
-            f"{export_device_id} {new_attribute['name']}="
-            f"{new_attribute['value']} status={response.status}"
-        ),
-    )

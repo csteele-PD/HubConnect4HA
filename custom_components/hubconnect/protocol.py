@@ -112,25 +112,44 @@ BINARY_SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
 def get_entity_mapping(state: State) -> EntityMapping | None:
     """Return the HubConnect mapping for a Home Assistant state."""
 
+    mappings = get_entity_mappings(state)
+    return mappings[0] if mappings else None
+
+
+def get_entity_mappings(state: State) -> list[EntityMapping]:
+    """Return all HubConnect mappings for a Home Assistant state."""
+
     domain = state.entity_id.split(".", 1)[0]
     device_class = state.attributes.get("device_class")
 
     if domain == "switch":
-        return _validated_mapping(EntityMapping("switch", "switch"))
+        mapping = _validated_mapping(EntityMapping("switch", "switch"))
+        return [mapping] if mapping else []
 
     if domain == "light":
         supported_color_modes = state.attributes.get("supported_color_modes") or set()
-        if "brightness" in supported_color_modes:
-            return _validated_mapping(EntityMapping("dimmer", "switch"))
-        return _validated_mapping(EntityMapping("switch", "switch"))
+        if (
+            "brightness" in supported_color_modes
+            or state.attributes.get("brightness") is not None
+        ):
+            mappings = [
+                _validated_mapping(EntityMapping("dimmer", "switch")),
+                _validated_mapping(EntityMapping("dimmer", "level", "%")),
+            ]
+            return [mapping for mapping in mappings if mapping is not None]
+
+        mapping = _validated_mapping(EntityMapping("switch", "switch"))
+        return [mapping] if mapping else []
 
     if domain == "sensor" and isinstance(device_class, str):
-        return _validated_mapping(SENSOR_DEVICE_CLASS_MAP.get(device_class))
+        mapping = _validated_mapping(SENSOR_DEVICE_CLASS_MAP.get(device_class))
+        return [mapping] if mapping else []
 
     if domain == "binary_sensor" and isinstance(device_class, str):
-        return _validated_mapping(BINARY_SENSOR_DEVICE_CLASS_MAP.get(device_class))
+        mapping = _validated_mapping(BINARY_SENSOR_DEVICE_CLASS_MAP.get(device_class))
+        return [mapping] if mapping else []
 
-    return None
+    return []
 
 
 def _validated_mapping(mapping: EntityMapping | None) -> EntityMapping | None:
@@ -229,7 +248,7 @@ def build_unsupported_exports(
         reason = ""
         if state.state in UNKNOWN_STATES:
             reason = f"state is {state.state}"
-        elif get_entity_mapping(state) is None:
+        elif not get_entity_mappings(state):
             reason = "unsupported domain or device_class"
 
         if reason:
@@ -270,7 +289,7 @@ def build_cleanup_device_ids(
     cleanup_ids: set[str] = set()
     selected_ids = set(selected_entity_ids or [])
     for state in _selected_states(hass, selected_ids):
-        if get_entity_mapping(state) is None:
+        if not get_entity_mappings(state):
             continue
         cleanup_ids.add(export_device_id_for_state(hass, state, selected_ids))
 
@@ -334,6 +353,12 @@ def hubconnect_value(state: State, mapping: EntityMapping) -> str:
     if mapping.attribute in {"smoke", "carbonMonoxide"}:
         return "detected" if state.state == "on" else "clear"
 
+    if mapping.attribute == "level":
+        brightness = state.attributes.get("brightness")
+        if brightness is None:
+            return "0" if state.state == "off" else "100"
+        return str(round(max(0, min(255, int(brightness))) * 100 / 255))
+
     return state.state
 
 
@@ -341,6 +366,11 @@ def build_command_payload(state: State) -> dict[str, list[dict[str, Any]]]:
     """Return a minimal HubConnect command map for an HA entity."""
 
     domain = state.entity_id.split(".", 1)[0]
+
+    if domain == "light" and any(
+        mapping.attribute == "level" for mapping in get_entity_mappings(state)
+    ):
+        return {"on": [], "off": [], "setLevel": [{"name": "level", "type": "NUMBER"}]}
 
     if domain in {"switch", "light"}:
         return {"on": [], "off": []}
@@ -433,34 +463,35 @@ def build_export_groups(
         if state.state in UNKNOWN_STATES:
             continue
 
-        mapping = get_entity_mapping(state)
-        if mapping is None:
+        mappings = get_entity_mappings(state)
+        if not mappings:
             continue
 
         export_base_id = _export_device_base_id_for_state(hass, state)
         plan = export_plans.get(export_base_id)
-        if plan is None:
-            device_class = mapping.device_class
-            export_id = f"{export_base_id}_{device_class}"
-        else:
-            device_class = plan.device_class
-            export_id = plan.export_id
-        if mapping.attribute not in HUBCONNECT_EXPORT_ATTRIBUTES.get(
-            device_class,
-            set(),
-        ):
-            continue
+        for mapping in mappings:
+            if plan is None:
+                device_class = mapping.device_class
+                export_id = f"{export_base_id}_{device_class}"
+            else:
+                device_class = plan.device_class
+                export_id = plan.export_id
+            if mapping.attribute not in HUBCONNECT_EXPORT_ATTRIBUTES.get(
+                device_class,
+                set(),
+            ):
+                continue
 
-        group = groups.setdefault(
-            export_id,
-            ExportGroup(
-                id=export_id,
-                label=export_device_label(hass, state),
-                device_class=device_class,
-                states=[],
-            ),
-        )
-        group.states.append((state, mapping))
+            group = groups.setdefault(
+                export_id,
+                ExportGroup(
+                    id=export_id,
+                    label=export_device_label(hass, state),
+                    device_class=device_class,
+                    states=[],
+                ),
+            )
+            group.states.append((state, mapping))
 
     for group in groups.values():
         group.states.sort(key=lambda item: item[1].attribute)
@@ -480,8 +511,7 @@ def _export_plans_for_selected_devices(
         state = hass.states.get(entity_id)
         if state is None:
             continue
-        mapping = get_entity_mapping(state)
-        if mapping is None:
+        if not get_entity_mappings(state):
             continue
         base_id = _export_device_base_id_for_state(hass, state)
         states_by_base_id.setdefault(base_id, []).append(state)
@@ -491,7 +521,7 @@ def _export_plans_for_selected_devices(
         attributes = {
             mapping.attribute
             for state in states
-            if (mapping := get_entity_mapping(state)) is not None
+            for mapping in get_entity_mappings(state)
         }
         device_class = _best_device_class_for_attributes(attributes)
         if device_class is None:
@@ -613,8 +643,7 @@ def _potential_attributes_for_state_device(
 
     device_id = _ha_device_id_for_state(hass, state)
     if not device_id:
-        mapping = get_entity_mapping(state)
-        return {mapping.attribute} if mapping else set()
+        return {mapping.attribute for mapping in get_entity_mappings(state)}
 
     attributes: set[str] = set()
     registry = er.async_get(hass)
@@ -622,8 +651,7 @@ def _potential_attributes_for_state_device(
         possible_state = hass.states.get(entry.entity_id)
         if possible_state is None:
             continue
-        mapping = get_entity_mapping(possible_state)
-        if mapping is not None:
+        for mapping in get_entity_mappings(possible_state):
             attributes.add(mapping.attribute)
     return attributes
 
