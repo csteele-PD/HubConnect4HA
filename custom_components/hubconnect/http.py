@@ -21,9 +21,15 @@ from .const import (
     DOMAIN,
     HTTP_BASE,
 )
-from .pairing import PairingError, async_pair_with_hubitat, decode_connection_key
+from .pairing import (
+    PairingError,
+    async_pair_with_hubitat,
+    async_post_to_hubitat,
+    decode_connection_key,
+)
 from .protocol import (
     async_execute_command,
+    build_cleanup_device_ids,
     build_devices_payload,
     build_export_requirements,
     build_sync_payload,
@@ -57,6 +63,7 @@ def async_register_http_views(hass: HomeAssistant) -> None:
     hass.http.register_view(HubConnectDeviceSyncView())
     hass.http.register_view(HubConnectCommandView())
     hass.http.register_view(HubConnectSetConnectStringView())
+    hass.http.register_view(HubConnectSystemUpdateView())
     hass.http.register_view(HubConnectDriversSaveView())
     hass.http.register_view(HubConnectTroubleshootingReportView())
     hass.http.register_view(HubConnectDevicesSaveView())
@@ -296,6 +303,34 @@ class HubConnectSetConnectStringView(HubConnectView):
         return self.json({"status": "success"})
 
 
+class HubConnectSystemUpdateView(HubConnectView):
+    """Handle HubConnect's remote software-update notification."""
+
+    url = f"{HTTP_BASE}/system/update"
+    name = "api:hubconnect:system_update"
+
+    async def get(self, request: web.Request) -> web.Response:
+        """Refresh exported HA devices after Hubitat reinitializes."""
+
+        runtime_data = self._runtime_data(request)
+        if runtime_data is None:
+            return self._unauthorized()
+
+        hass: HomeAssistant = request.app["hass"]
+        try:
+            await _async_push_selected_entities_to_hubitat(hass, runtime_data)
+        except PairingError as err:
+            get_shadow_registry(hass).log_request(
+                "GET",
+                request.path,
+                "error",
+                str(err),
+            )
+            return self.json({"status": "error", "message": str(err)})
+        get_shadow_registry(hass).log_request("GET", request.path, "success")
+        return self.json({"status": "success"})
+
+
 class HubConnectDriversSaveView(HubConnectView):
     """Accept HubConnect custom driver metadata from Hubitat."""
 
@@ -477,6 +512,86 @@ class HubConnectDeviceEventView(HubConnectView):
             f"{data.get('name')}={data.get('value')} live={_live_state_for_unique_id(hass, unique_id)}",
         )
         return self.json({"status": "complete"})
+
+
+async def _async_push_selected_entities_to_hubitat(
+    hass: HomeAssistant,
+    runtime_data,
+) -> None:
+    """Push selected Home Assistant entities to Hubitat."""
+
+    registry = get_shadow_registry(hass)
+    hubitat_uri = getattr(runtime_data, "hubitat_uri", None)
+    hubitat_token = getattr(runtime_data, "hubitat_token", None)
+    if not hubitat_uri or not hubitat_token:
+        registry.log_export_push(
+            "",
+            "skipped",
+            "missing hubitat uri/token",
+            {},
+            None,
+        )
+        return
+
+    selected_entity_ids = getattr(runtime_data, "exported_entity_ids", ())
+    payloads = build_devices_payload(hass, selected_entity_ids)
+    cleanup_ids = build_cleanup_device_ids(hass, selected_entity_ids)
+
+    for payload in payloads:
+        target = f"{hubitat_uri.rstrip('/')}/devices/save"
+        try:
+            response = await async_post_to_hubitat(
+                hass,
+                hubitat_uri,
+                hubitat_token,
+                "/devices/save",
+                payload,
+            )
+        except PairingError as err:
+            registry.log_export_push(
+                target,
+                "error",
+                str(err),
+                payload,
+                err.response,
+            )
+            raise
+
+        registry.log_export_push(
+            target,
+            "complete",
+            f"{payload['deviceclass']}:{len(payload['devices'])}",
+            payload,
+            response,
+        )
+
+    cleanup_payload = {"cleanupDevices": cleanup_ids}
+    target = f"{hubitat_uri.rstrip('/')}/devices/save"
+    try:
+        response = await async_post_to_hubitat(
+            hass,
+            hubitat_uri,
+            hubitat_token,
+            "/devices/save",
+            cleanup_payload,
+        )
+    except PairingError as err:
+        registry.log_export_push(
+            target,
+            "error",
+            str(err),
+            cleanup_payload,
+            err.response,
+        )
+        raise
+
+    registry.log_export_push(
+        target,
+        "complete",
+        f"cleanup:{len(cleanup_ids)}",
+        cleanup_payload,
+        response,
+    )
 
 
 async def _decode_event(event: str) -> dict:
