@@ -152,16 +152,26 @@ def _native_entity_mappings(state: State) -> list[EntityMapping]:
 
     domain = state.entity_id.split(".", 1)[0]
     device_class = state.attributes.get("device_class")
+    return _native_entity_mappings_for_parts(domain, device_class, state)
+
+
+def _native_entity_mappings_for_parts(
+    domain: str,
+    device_class: Any,
+    state: State | None = None,
+) -> list[EntityMapping]:
+    """Return native mappings from HA entity parts."""
 
     if domain == "switch":
         mapping = _validated_mapping(EntityMapping("switch", "switch"))
         return [mapping] if mapping else []
 
     if domain == "light":
-        supported_color_modes = state.attributes.get("supported_color_modes") or set()
+        attributes = state.attributes if state is not None else {}
+        supported_color_modes = attributes.get("supported_color_modes") or set()
         if (
             "brightness" in supported_color_modes
-            or state.attributes.get("brightness") is not None
+            or attributes.get("brightness") is not None
         ):
             mappings = [
                 _validated_mapping(EntityMapping("dimmer", "switch")),
@@ -618,23 +628,19 @@ def _export_plans_for_selected_devices(
     """Build stable HubConnect class/id plans from selected HA device siblings."""
 
     selected_ids = {str(entity_id) for entity_id in selected_entity_ids or []}
-    states_by_base_id: dict[str, list[State]] = {}
+    attributes_by_base_id: dict[str, set[str]] = {}
     for entity_id in selected_ids:
         state = hass.states.get(entity_id)
-        if state is None:
+        mappings = _native_entity_mappings_for_entity_id(hass, entity_id, state)
+        if not mappings:
             continue
-        if not _native_entity_mappings(state):
-            continue
-        base_id = _export_device_base_id_for_state(hass, state)
-        states_by_base_id.setdefault(base_id, []).append(state)
+        base_id = _export_device_base_id_for_entity_id(hass, entity_id)
+        attributes_by_base_id.setdefault(base_id, set()).update(
+            mapping.attribute for mapping in mappings
+        )
 
     plans: dict[str, ExportPlan] = {}
-    for base_id, states in states_by_base_id.items():
-        attributes = {
-            mapping.attribute
-            for state in states
-            for mapping in _native_entity_mappings(state)
-        }
+    for base_id, attributes in attributes_by_base_id.items():
         device_class = _best_device_class_for_attributes(attributes)
         if device_class is None:
             continue
@@ -650,6 +656,28 @@ def _export_plans_for_selected_devices(
         )
 
     return plans
+
+
+def _native_entity_mappings_for_entity_id(
+    hass: HomeAssistant,
+    entity_id: str,
+    state: State | None = None,
+) -> list[EntityMapping]:
+    """Return native mappings for an entity, even before state is fully loaded."""
+
+    if state is not None:
+        return _native_entity_mappings(state)
+
+    domain = entity_id.split(".", 1)[0]
+    entry = er.async_get(hass).async_get(entity_id)
+    device_class = None
+    if entry is not None:
+        device_class = (
+            getattr(entry, "device_class", None)
+            or getattr(entry, "original_device_class", None)
+        )
+
+    return _native_entity_mappings_for_parts(domain, device_class)
 
 
 def find_export_group(
@@ -700,10 +728,17 @@ def export_device_label_for_state(
 def _export_device_base_id_for_state(hass: HomeAssistant, state: State) -> str:
     """Return the base HubConnect device id for an exported HA state."""
 
-    device_id = _ha_device_id_for_state(hass, state)
+    return _export_device_base_id_for_entity_id(hass, state.entity_id)
+
+
+def _export_device_base_id_for_entity_id(hass: HomeAssistant, entity_id: str) -> str:
+    """Return the base HubConnect device id for an HA entity id."""
+
+    entry = er.async_get(hass).async_get(entity_id)
+    device_id = entry.device_id if entry else None
     if device_id:
         return f"{EXPORT_DEVICE_PREFIX}{device_id}"
-    return state.entity_id
+    return entity_id
 
 
 def export_device_label(hass: HomeAssistant, state: State) -> str:
