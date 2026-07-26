@@ -33,6 +33,7 @@ from .protocol import (
     build_cleanup_device_ids,
     build_devices_payload,
     build_export_requirements,
+    build_generic_fallback_exports,
     build_unsupported_exports,
 )
 from .shadow import get_shadow_registry
@@ -219,6 +220,10 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
 
         selected_entity_ids = options.get(CONF_EXPORTED_ENTITY_IDS, [])
         requirements = build_export_requirements(self.hass, selected_entity_ids)
+        generic_fallbacks = build_generic_fallback_exports(
+            self.hass,
+            selected_entity_ids,
+        )
         unsupported = build_unsupported_exports(self.hass, selected_entity_ids)
         payloads = build_devices_payload(self.hass, selected_entity_ids)
 
@@ -228,6 +233,11 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
         return {
             "exported_count": str(exported_count),
             "required_drivers": "\n".join(f"- {driver}" for driver in drivers)
+            or "- None",
+            "generic_fallback_entities": "\n".join(
+                f"- {entity['entity_id']}: {entity['driver']} ({entity['deviceclass']})"
+                for entity in generic_fallbacks
+            )
             or "- None",
             "unsupported_entities": "\n".join(
                 f"- {entity['entity_id']}: {entity['reason']}"

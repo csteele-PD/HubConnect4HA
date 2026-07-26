@@ -32,6 +32,7 @@ from .protocol import (
     build_cleanup_device_ids,
     build_devices_payload,
     build_export_requirements,
+    build_generic_fallback_exports,
     build_sync_payload,
     build_unsupported_exports,
 )
@@ -816,6 +817,10 @@ class HubConnectShadowDebugView(HubConnectView):
                         runtime_data.exported_entity_ids if runtime_data else [],
                     ),
                     "required_drivers": build_export_requirements(
+                        hass,
+                        runtime_data.exported_entity_ids if runtime_data else [],
+                    ),
+                    "generic_fallback_entities": build_generic_fallback_exports(
                         hass,
                         runtime_data.exported_entity_ids if runtime_data else [],
                     ),

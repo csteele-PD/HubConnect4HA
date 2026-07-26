@@ -42,9 +42,40 @@ Current HA-to-Hubitat export mapping:
 | `sensor` illuminance | `v_illuminance` | `HubConnect Virtual Illuminance Sensor` |
 | `sensor` power | `power` | `HubConnect Power Meter` |
 | `sensor` energy | `energy` | `HubConnect Energy Meter` |
+| other supported-state HA entities | `h4hageneric` | `HubConnect4HA Generic Entity` custom driver |
 
 Unsupported selected entities are intentionally excluded from export and reported
 in the debug endpoint.
+
+## Generic HA Entity Fallback
+
+When a selected HA entity has a real state but does not map cleanly to a native
+HubConnect class, HubConnect4HA exports it with the custom class
+`h4hageneric`. This is meant as an escape hatch for unusual HA integrations:
+the Hubitat child carries enough clues to build a proper custom driver later.
+
+Create this custom driver definition in the HubConnect Server app before using
+the fallback:
+
+```text
+Attribute Class Name: h4hageneric
+Device Driver Name: HubConnect4HA Generic Entity
+Attribute 1: temperature
+Attribute 2: value
+Attribute 3: rawState
+Attribute 4: unit
+Attribute 5: entityId
+Attribute 6: domain
+Attribute 7: deviceClass
+Attribute 8: friendlyName
+Attribute 9: lastChanged
+```
+
+Install [HubConnect4HA-Generic-Entity.groovy](HubConnect4HA-Generic-Entity.groovy)
+as a Hubitat driver, or use HubConnect Server's custom-driver builder to create
+the matching stub. The primary `temperature` attribute exists only because
+HubConnect custom drivers need one known capability; the useful raw HA details
+are in the string attributes.
 
 ## Selection Model
 
@@ -86,6 +117,8 @@ Key `shadows/get` fields:
 - `ha_export.selected_entity_ids`: selected HA entities.
 - `ha_export.current_payload`: protocol payload HA will send to Hubitat.
 - `ha_export.required_drivers`: Hubitat drivers required by selected HA exports.
+- `ha_export.generic_fallback_entities`: selected HA entities exported through
+  the `h4hageneric` custom fallback class.
 - `ha_export.unsupported_entities`: selected HA entities excluded from export.
 - `ha_export.pushes`: recent HA-to-Hubitat `/devices/save` POSTs and responses.
 
@@ -94,6 +127,8 @@ Key `shadows/get` fields:
 - Device coverage is intentionally incomplete.
 - Standalone HA battery sensors are not exported yet because HubConnect has no
   native standalone battery deviceclass.
+- Generic fallback exports require the `h4hageneric` custom driver definition on
+  the HubConnect Server side; HA cannot add that definition to Hubitat by itself.
 - Button `released` may not arrive through classic HubConnect button selection.
 - Speech synthesis devices are command-oriented and do not create useful HA
   shadow entities yet.

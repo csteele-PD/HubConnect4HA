@@ -33,7 +33,7 @@
       },
       "confirm": {
         "title": "Review Hubitat export",
-        "description": "HubConnect will export {exported_count} Home Assistant device(s) to Hubitat.\n\nRequired Hubitat drivers:\n{required_drivers}\n\nSelected entities not exported:\n{unsupported_entities}"
+        "description": "HubConnect will export {exported_count} Home Assistant device(s) to Hubitat.\n\nRequired Hubitat drivers:\n{required_drivers}\n\nGeneric fallback exports:\n{generic_fallback_entities}\n\nSelected entities not exported:\n{unsupported_entities}"
       }
     },
     "error": {

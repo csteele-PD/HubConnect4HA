@@ -14,6 +14,19 @@ from homeassistant.helpers import entity_registry as er
 
 UNKNOWN_STATES = {"unknown", "unavailable"}
 EXPORT_DEVICE_PREFIX = "ha_device_"
+GENERIC_ENTITY_DEVICE_CLASS = "h4hageneric"
+GENERIC_ENTITY_DRIVER = "HubConnect4HA Generic Entity"
+GENERIC_ENTITY_ATTRIBUTES = {
+    "deviceClass",
+    "domain",
+    "entityId",
+    "friendlyName",
+    "lastChanged",
+    "rawState",
+    "temperature",
+    "unit",
+    "value",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +82,7 @@ HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
     "v_humidity": {"humidity"},
     "v_illuminance": {"illuminance"},
     "v_temperature": {"temperature"},
+    GENERIC_ENTITY_DEVICE_CLASS: GENERIC_ENTITY_ATTRIBUTES,
 }
 
 HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
@@ -85,6 +99,7 @@ HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
     "v_humidity": "HubConnect Virtual Virtual Humidity Sensor",
     "v_illuminance": "HubConnect Virtual Illuminance Sensor",
     "v_temperature": "HubConnect Virtual Temperature Sensor",
+    GENERIC_ENTITY_DEVICE_CLASS: GENERIC_ENTITY_DRIVER,
 }
 
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
@@ -118,6 +133,22 @@ def get_entity_mapping(state: State) -> EntityMapping | None:
 
 def get_entity_mappings(state: State) -> list[EntityMapping]:
     """Return all HubConnect mappings for a Home Assistant state."""
+
+    native_mappings = _native_entity_mappings(state)
+    return native_mappings or _generic_entity_mappings()
+
+
+def _generic_entity_mappings() -> list[EntityMapping]:
+    """Return the generic fallback mappings for a Home Assistant state."""
+
+    return [
+        EntityMapping(GENERIC_ENTITY_DEVICE_CLASS, attribute)
+        for attribute in sorted(GENERIC_ENTITY_ATTRIBUTES)
+    ]
+
+
+def _native_entity_mappings(state: State) -> list[EntityMapping]:
+    """Return native HubConnect mappings without generic fallback."""
 
     domain = state.entity_id.split(".", 1)[0]
     device_class = state.attributes.get("device_class")
@@ -280,6 +311,32 @@ def build_unsupported_exports(
     return sorted(unsupported, key=lambda entity: entity["entity_id"])
 
 
+def build_generic_fallback_exports(
+    hass: HomeAssistant,
+    selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return selected HA entities exported with the generic fallback driver."""
+
+    fallback_exports: list[dict[str, Any]] = []
+    for group in build_export_groups(hass, selected_entity_ids):
+        if group.device_class != GENERIC_ENTITY_DEVICE_CLASS:
+            continue
+        entity_ids = sorted({state.entity_id for state, _mapping in group.states})
+        for entity_id in entity_ids:
+            state = hass.states.get(entity_id)
+            fallback_exports.append(
+                {
+                    "entity_id": entity_id,
+                    "label": friendly_name(state) if state else entity_id,
+                    "export_id": group.id,
+                    "deviceclass": group.device_class,
+                    "driver": GENERIC_ENTITY_DRIVER,
+                }
+            )
+
+    return sorted(fallback_exports, key=lambda entity: entity["entity_id"])
+
+
 def build_cleanup_device_ids(
     hass: HomeAssistant,
     selected_entity_ids: tuple[str, ...] | list[str] | set[str] | None = None,
@@ -328,8 +385,21 @@ def build_attribute_payload(state: State, mapping: EntityMapping) -> dict[str, A
     return {
         "name": mapping.attribute,
         "value": hubconnect_value(state, mapping),
-        "unit": state.attributes.get("unit_of_measurement") or mapping.unit,
+        "unit": _unit_for_mapping(state, mapping),
     }
+
+
+def _unit_for_mapping(state: State, mapping: EntityMapping) -> str:
+    """Return the HubConnect unit for an attribute payload."""
+
+    if mapping.device_class == GENERIC_ENTITY_DEVICE_CLASS:
+        if mapping.attribute == "unit":
+            return ""
+        if mapping.attribute == "value":
+            return state.attributes.get("unit_of_measurement") or mapping.unit
+        return ""
+
+    return state.attributes.get("unit_of_measurement") or mapping.unit
 
 
 def hubconnect_value(state: State, mapping: EntityMapping) -> str:
@@ -337,6 +407,9 @@ def hubconnect_value(state: State, mapping: EntityMapping) -> str:
 
     if state.state in UNKNOWN_STATES:
         return state.state
+
+    if mapping.device_class == GENERIC_ENTITY_DEVICE_CLASS:
+        return _generic_entity_value(state, mapping.attribute)
 
     if mapping.attribute == "contact":
         return "open" if state.state == "on" else "closed"
@@ -360,6 +433,40 @@ def hubconnect_value(state: State, mapping: EntityMapping) -> str:
         return str(round(max(0, min(255, int(brightness))) * 100 / 255))
 
     return state.state
+
+
+def _generic_entity_value(state: State, attribute: str) -> str:
+    """Return generic fallback metadata for one HA entity."""
+
+    domain = state.entity_id.split(".", 1)[0]
+    if attribute == "deviceClass":
+        return str(state.attributes.get("device_class") or "")
+    if attribute == "domain":
+        return domain
+    if attribute == "entityId":
+        return state.entity_id
+    if attribute == "friendlyName":
+        return friendly_name(state)
+    if attribute == "lastChanged":
+        return state.last_changed.isoformat()
+    if attribute == "rawState":
+        return state.state
+    if attribute == "temperature":
+        return _numeric_state_or_zero(state)
+    if attribute == "unit":
+        return str(state.attributes.get("unit_of_measurement") or "")
+    if attribute == "value":
+        return state.state
+    return ""
+
+
+def _numeric_state_or_zero(state: State) -> str:
+    """Return HA state as a numeric string for HubConnect primary capability."""
+
+    try:
+        return str(float(state.state))
+    except ValueError:
+        return "0"
 
 
 def build_command_payload(state: State) -> dict[str, list[dict[str, Any]]]:
@@ -467,7 +574,12 @@ def build_export_groups(
         if not mappings:
             continue
 
-        export_base_id = _export_device_base_id_for_state(hass, state)
+        native_mappings = _native_entity_mappings(state)
+        export_base_id = (
+            _export_device_base_id_for_state(hass, state)
+            if native_mappings
+            else state.entity_id
+        )
         plan = export_plans.get(export_base_id)
         for mapping in mappings:
             if plan is None:
@@ -511,7 +623,7 @@ def _export_plans_for_selected_devices(
         state = hass.states.get(entity_id)
         if state is None:
             continue
-        if not get_entity_mappings(state):
+        if not _native_entity_mappings(state):
             continue
         base_id = _export_device_base_id_for_state(hass, state)
         states_by_base_id.setdefault(base_id, []).append(state)
@@ -521,7 +633,7 @@ def _export_plans_for_selected_devices(
         attributes = {
             mapping.attribute
             for state in states
-            for mapping in get_entity_mappings(state)
+            for mapping in _native_entity_mappings(state)
         }
         device_class = _best_device_class_for_attributes(attributes)
         if device_class is None:
