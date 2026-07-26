@@ -50,9 +50,9 @@ in the debug endpoint.
 
 ## Generic HA Entity Fallback
 
-When a selected HA entity has a real state but does not map cleanly to a native
-HubConnect class, HubConnect4HA exports it through HubConnect's built-in
-`v_temperature` class. This is meant as an escape hatch for unusual HA
+When a selected HA `sensor` entity has a real state but does not map cleanly to
+a native HubConnect class, HubConnect4HA exports it through HubConnect's
+built-in `v_temperature` class. This is meant as an escape hatch for unusual HA
 integrations: the Hubitat child should be created by an existing HubConnect
 driver, while extra event attributes carry clues such as `value`, `rawState`,
 `entityId`, `domain`, `deviceClass`, `unit`, `friendlyName`, and `lastChanged`.
@@ -111,8 +111,9 @@ Key `shadows/get` fields:
 - Device coverage is intentionally incomplete.
 - Standalone HA battery sensors export as `omnipurpose` because HubConnect has
   no native standalone battery deviceclass.
-- Generic fallback exports use `HubConnect Virtual Temperature Sensor` as a
-  carrier, so the primary value can look odd for non-temperature HA entities.
+- Generic fallback exports are limited to `sensor` entities and use
+  `HubConnect Virtual Temperature Sensor` as a carrier, so the primary value can
+  look odd for non-temperature HA entities.
 - Button `released` may not arrive through classic HubConnect button selection.
 - Speech synthesis devices are command-oriented and do not create useful HA
   shadow entities yet.

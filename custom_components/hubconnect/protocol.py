@@ -134,7 +134,18 @@ def get_entity_mappings(state: State) -> list[EntityMapping]:
     """Return all HubConnect mappings for a Home Assistant state."""
 
     native_mappings = _native_entity_mappings(state)
-    return native_mappings or _generic_entity_mappings()
+    if native_mappings:
+        return native_mappings
+    if _supports_generic_fallback(state):
+        return _generic_entity_mappings()
+    return []
+
+
+def _supports_generic_fallback(state: State) -> bool:
+    """Return true if an unmapped HA entity should use the generic fallback."""
+
+    domain = state.entity_id.split(".", 1)[0]
+    return domain == "sensor"
 
 
 def _generic_entity_mappings() -> list[EntityMapping]:
