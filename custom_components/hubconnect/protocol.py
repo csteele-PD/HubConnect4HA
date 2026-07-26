@@ -620,7 +620,11 @@ def build_export_groups(
                 export_id,
                 ExportGroup(
                     id=export_id,
-                    label=export_device_label(hass, state),
+                    label=(
+                        export_device_label(hass, state)
+                        if native_mappings
+                        else friendly_name(state)
+                    ),
                     device_class=device_class,
                     states=[],
                     fallback=not native_mappings,
