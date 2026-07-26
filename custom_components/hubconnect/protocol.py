@@ -44,9 +44,8 @@ class ExportPlan:
     export_id: str
 
 
-# HubConnect deviceclass keys must match the Groovy NATIVE_DEVICES table. Prefer
-# standard mirror drivers when they exist; use v_* only for standalone synthetic
-# measurements where HubConnect has no plain native class.
+# HubConnect deviceclass keys must match the Groovy NATIVE_DEVICES table, but
+# only emit classes with real Universal Drivers available in normal installs.
 HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
     "contact": {"contact", "temperature", "battery"},
     "dimmer": {"switch", "level"},
@@ -66,9 +65,6 @@ HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
     "presence": {"presence", "battery"},
     "smoke": {"smoke", "carbonMonoxide", "battery"},
     "switch": {"switch"},
-    "v_humidity": {"humidity"},
-    "v_illuminance": {"illuminance"},
-    "v_temperature": {"temperature"},
 }
 
 HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
@@ -82,17 +78,14 @@ HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
     "presence": "HubConnect Presence Sensor",
     "smoke": "HubConnect SmokeCO",
     "switch": "HubConnect Switch",
-    "v_humidity": "HubConnect Virtual Virtual Humidity Sensor",
-    "v_illuminance": "HubConnect Virtual Illuminance Sensor",
-    "v_temperature": "HubConnect Virtual Temperature Sensor",
 }
 
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
     "energy": EntityMapping("energy", "energy"),
-    "humidity": EntityMapping("v_humidity", "humidity", "%"),
-    "illuminance": EntityMapping("v_illuminance", "illuminance"),
+    "humidity": EntityMapping("omnipurpose", "humidity", "%"),
+    "illuminance": EntityMapping("omnipurpose", "illuminance"),
     "power": EntityMapping("power", "power", "W"),
-    "temperature": EntityMapping("v_temperature", "temperature"),
+    "temperature": EntityMapping("omnipurpose", "temperature"),
 }
 
 BINARY_SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
@@ -616,6 +609,23 @@ def export_device_label(hass: HomeAssistant, state: State) -> str:
 
 def _best_device_class_for_attributes(attributes: set[str]) -> str | None:
     """Choose the most specific HubConnect class for a set of attributes."""
+
+    omnibus_attributes = {
+        "battery",
+        "humidity",
+        "illuminance",
+        "tamper",
+        "temperature",
+        "ultravioletIndex",
+    }
+    if attributes <= omnibus_attributes and attributes & {
+        "humidity",
+        "illuminance",
+        "tamper",
+        "temperature",
+        "ultravioletIndex",
+    }:
+        return "omnipurpose"
 
     candidates = [
         device_class

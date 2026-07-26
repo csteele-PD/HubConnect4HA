@@ -37,9 +37,7 @@ Current HA-to-Hubitat export mapping:
 | `binary_sensor` moisture | `moisture` | `HubConnect Moisture Sensor` |
 | `binary_sensor` presence | `presence` | `HubConnect Presence Sensor` |
 | `binary_sensor` smoke/gas | `smoke` | `HubConnect SmokeCO` |
-| `sensor` temperature | `v_temperature` | `HubConnect Virtual Temperature Sensor` |
-| `sensor` humidity | `v_humidity` | `HubConnect Virtual Virtual Humidity Sensor` |
-| `sensor` illuminance | `v_illuminance` | `HubConnect Virtual Illuminance Sensor` |
+| standalone `sensor` temperature/humidity/illuminance | `omnipurpose` | `HubConnect Omnipurpose Sensor` |
 | `sensor` power | `power` | `HubConnect Power Meter` |
 | `sensor` energy | `energy` | `HubConnect Energy Meter` |
 

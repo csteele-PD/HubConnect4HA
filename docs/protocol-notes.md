@@ -46,7 +46,7 @@ Start with low-risk, common entities:
 switch          -> switch
 light           -> switch, dimmer, rgbbulb, rgbwbulb
 binary_sensor   -> contact, motion, moisture
-sensor          -> v_temperature, v_humidity, power, energy
+sensor          -> omnipurpose, power, energy
 lock            -> lock
 cover           -> windowshade
 climate         -> thermostat
