@@ -31,10 +31,9 @@ The integration should support both import and export flows under one Home Assis
 
 - Hubitat to Home Assistant imports only devices selected in the Hubitat HubConnect Server Instance. HubConnect remote clients do not receive an implicit "all devices" selection.
 - Home Assistant to Hubitat exports only entities selected in the HubConnect integration options. `/devices/get` must not auto-export every mappable Home Assistant entity. A future "all" choice may exist only as an explicit selector option.
-- Unsupported-but-valid Home Assistant entities can export through the custom
-  `h4hageneric` class when the matching HubConnect custom driver definition is
-  installed on the Hubitat Server side. This keeps native grouping preferred
-  while giving odd HA integrations a visible, inspectable child device.
+- Unsupported-but-valid Home Assistant entities can export through a fallback
+  native HubConnect class. This keeps native grouping preferred while giving odd
+  HA integrations a visible, inspectable child device.
 
 ## Reference Implementations
 

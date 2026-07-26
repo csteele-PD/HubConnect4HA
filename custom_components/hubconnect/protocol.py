@@ -14,8 +14,7 @@ from homeassistant.helpers import entity_registry as er
 
 UNKNOWN_STATES = {"unknown", "unavailable"}
 EXPORT_DEVICE_PREFIX = "ha_device_"
-GENERIC_ENTITY_DEVICE_CLASS = "h4hageneric"
-GENERIC_ENTITY_DRIVER = "HubConnect4HA Generic Entity"
+GENERIC_ENTITY_DEVICE_CLASS = "v_temperature"
 GENERIC_ENTITY_ATTRIBUTES = {
     "deviceClass",
     "domain",
@@ -46,6 +45,7 @@ class ExportGroup:
     label: str
     device_class: str
     states: list[tuple[State, EntityMapping]]
+    fallback: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +82,6 @@ HUBCONNECT_EXPORT_ATTRIBUTES: dict[str, set[str]] = {
     "v_humidity": {"humidity"},
     "v_illuminance": {"illuminance"},
     "v_temperature": {"temperature"},
-    GENERIC_ENTITY_DEVICE_CLASS: GENERIC_ENTITY_ATTRIBUTES,
 }
 
 HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
@@ -99,10 +98,10 @@ HUBCONNECT_EXPORT_DRIVERS: dict[str, str] = {
     "v_humidity": "HubConnect Virtual Virtual Humidity Sensor",
     "v_illuminance": "HubConnect Virtual Illuminance Sensor",
     "v_temperature": "HubConnect Virtual Temperature Sensor",
-    GENERIC_ENTITY_DEVICE_CLASS: GENERIC_ENTITY_DRIVER,
 }
 
 SENSOR_DEVICE_CLASS_MAP: dict[str, EntityMapping] = {
+    "battery": EntityMapping("omnipurpose", "battery", "%"),
     "energy": EntityMapping("energy", "energy"),
     "humidity": EntityMapping("v_humidity", "humidity", "%"),
     "illuminance": EntityMapping("v_illuminance", "illuminance"),
@@ -329,7 +328,7 @@ def build_generic_fallback_exports(
 
     fallback_exports: list[dict[str, Any]] = []
     for group in build_export_groups(hass, selected_entity_ids):
-        if group.device_class != GENERIC_ENTITY_DEVICE_CLASS:
+        if not group.fallback:
             continue
         entity_ids = sorted({state.entity_id for state, _mapping in group.states})
         for entity_id in entity_ids:
@@ -340,7 +339,7 @@ def build_generic_fallback_exports(
                     "label": friendly_name(state) if state else entity_id,
                     "export_id": group.id,
                     "deviceclass": group.device_class,
-                    "driver": GENERIC_ENTITY_DRIVER,
+                    "driver": HUBCONNECT_EXPORT_DRIVERS[group.device_class],
                 }
             )
 
@@ -601,6 +600,8 @@ def build_export_groups(
             if mapping.attribute not in HUBCONNECT_EXPORT_ATTRIBUTES.get(
                 device_class,
                 set(),
+            ) and not (
+                not native_mappings and mapping.attribute in GENERIC_ENTITY_ATTRIBUTES
             ):
                 continue
 
@@ -611,6 +612,7 @@ def build_export_groups(
                     label=export_device_label(hass, state),
                     device_class=device_class,
                     states=[],
+                    fallback=not native_mappings,
                 ),
             )
             group.states.append((state, mapping))
@@ -763,6 +765,9 @@ def export_device_label(hass: HomeAssistant, state: State) -> str:
 
 def _best_device_class_for_attributes(attributes: set[str]) -> str | None:
     """Choose the most specific HubConnect class for a set of attributes."""
+
+    if attributes == {"battery"}:
+        return "omnipurpose"
 
     candidates = [
         device_class
