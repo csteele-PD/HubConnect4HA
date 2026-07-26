@@ -28,9 +28,16 @@
         "data": {
           "exported_entity_ids": "Home Assistant entities to expose to Hubitat",
           "ha_base_url": "Home Assistant base URL",
-          "hubitat_connection_key": "Hubitat connection key (optional after pairing)"
+          "hubitat_connection_key": "Hubitat connection key"
         }
+      },
+      "confirm": {
+        "title": "Review Hubitat export",
+        "description": "HubConnect will export {exported_count} Home Assistant device(s) to Hubitat.\n\nRequired Hubitat drivers:\n{required_drivers}\n\nSelected entities not exported:\n{unsupported_entities}"
       }
+    },
+    "error": {
+      "missing_hubitat_connection": "Paste the Hubitat connection key before exposing Home Assistant entities to Hubitat."
     }
   }
 }

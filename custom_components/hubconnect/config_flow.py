@@ -29,7 +29,12 @@ from .pairing import (
     async_post_to_hubitat,
     decode_connection_key,
 )
-from .protocol import build_cleanup_device_ids, build_devices_payload
+from .protocol import (
+    build_cleanup_device_ids,
+    build_devices_payload,
+    build_export_requirements,
+    build_unsupported_exports,
+)
 from .shadow import get_shadow_registry
 
 
@@ -86,6 +91,7 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
         """Initialize options flow."""
 
         self._config_entry = config_entry
+        self._pending_options: dict[str, Any] | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -131,10 +137,21 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
                     )
 
             if not errors:
-                try:
-                    await self._async_push_selected_entities_to_hubitat(options)
-                except PairingError as err:
-                    errors["base"] = str(err)
+                selected_entity_ids = options.get(CONF_EXPORTED_ENTITY_IDS, [])
+                if selected_entity_ids and (
+                    not options.get(CONF_HUBITAT_URI)
+                    or not options.get(CONF_HUBITAT_TOKEN)
+                ):
+                    errors["base"] = "missing_hubitat_connection"
+                else:
+                    self._pending_options = options
+                    return self.async_show_form(
+                        step_id="confirm",
+                        data_schema=vol.Schema({}),
+                        description_placeholders=self._diagnostic_placeholders(
+                            options
+                        ),
+                    )
 
             if not errors:
                 return self.async_create_entry(title="", data=options)
@@ -166,6 +183,58 @@ class HubConnectOptionsFlow(config_entries.OptionsFlow):
             data_schema=schema,
             errors=errors,
         )
+
+    async def async_step_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Confirm export diagnostics and save options."""
+
+        if user_input is not None and self._pending_options is not None:
+            try:
+                await self._async_push_selected_entities_to_hubitat(
+                    self._pending_options
+                )
+            except PairingError as err:
+                return self.async_show_form(
+                    step_id="confirm",
+                    data_schema=vol.Schema({}),
+                    errors={"base": str(err)},
+                    description_placeholders=self._diagnostic_placeholders(
+                        self._pending_options
+                    ),
+                )
+
+            return self.async_create_entry(title="", data=self._pending_options)
+
+        return self.async_show_form(
+            step_id="confirm",
+            data_schema=vol.Schema({}),
+            description_placeholders=self._diagnostic_placeholders(
+                self._pending_options or self._config_entry.options
+            ),
+        )
+
+    def _diagnostic_placeholders(self, options: dict[str, Any]) -> dict[str, str]:
+        """Return export diagnostic text for the confirmation page."""
+
+        selected_entity_ids = options.get(CONF_EXPORTED_ENTITY_IDS, [])
+        requirements = build_export_requirements(self.hass, selected_entity_ids)
+        unsupported = build_unsupported_exports(self.hass, selected_entity_ids)
+        payloads = build_devices_payload(self.hass, selected_entity_ids)
+
+        drivers = sorted({requirement["driver"] for requirement in requirements})
+        exported_count = sum(len(payload["devices"]) for payload in payloads)
+
+        return {
+            "exported_count": str(exported_count),
+            "required_drivers": "\n".join(f"- {driver}" for driver in drivers)
+            or "- None",
+            "unsupported_entities": "\n".join(
+                f"- {entity['entity_id']}: {entity['reason']}"
+                for entity in unsupported
+            )
+            or "- None",
+        }
 
     async def _async_push_selected_entities_to_hubitat(
         self,
